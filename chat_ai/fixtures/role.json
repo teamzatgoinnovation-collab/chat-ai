@@ -1,0 +1,14 @@
+[
+  {
+    "doctype": "Role",
+    "role_name": "Chat AI User",
+    "desk_access": 1,
+    "name": "Chat AI User"
+  },
+  {
+    "doctype": "Role",
+    "role_name": "Chat AI Manager",
+    "desk_access": 1,
+    "name": "Chat AI Manager"
+  }
+]

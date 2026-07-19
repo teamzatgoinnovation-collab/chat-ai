@@ -1,0 +1,5 @@
+recursive-include chat_ai/public *
+recursive-include chat_ai/fixtures *
+recursive-include chat_ai/core/prompts *
+recursive-include chat_ai/erpnext/skills *
+recursive-include chat_ai/templates *
