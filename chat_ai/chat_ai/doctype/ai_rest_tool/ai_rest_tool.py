@@ -5,6 +5,6 @@ import frappe
 from frappe.model.document import Document
 
 
-class AiRestTool(Document):
+class AIRESTTool(Document):
 	pass
 

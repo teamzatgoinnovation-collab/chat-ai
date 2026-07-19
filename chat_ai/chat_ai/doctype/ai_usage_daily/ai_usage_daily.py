@@ -5,6 +5,6 @@ import frappe
 from frappe.model.document import Document
 
 
-class AiUsageDaily(Document):
+class AIUsageDaily(Document):
 	pass
 
