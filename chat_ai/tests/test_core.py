@@ -76,5 +76,19 @@ class TestAgentLimits(unittest.TestCase):
 		self.assertEqual(lim.max_tool_calls, 5)
 
 
+class TestI18n(unittest.TestCase):
+	def test_normalize_arabic(self):
+		from chat_ai.core.i18n import get_language, normalize_language
+
+		self.assertEqual(normalize_language("ar"), "ar")
+		self.assertEqual(normalize_language("Arabic"), "ar")
+		self.assertEqual(get_language("ar")["dir"], "rtl")
+
+	def test_malayalam_prompt(self):
+		from chat_ai.core.i18n import language_prompt
+
+		self.assertIn("Malayalam", language_prompt("ml"))
+
+
 if __name__ == "__main__":
 	unittest.main()

@@ -165,16 +165,65 @@ def list_commands():
 
 
 @frappe.whitelist()
-def new_session(title=None, assistant_mode=None):
+def new_session(title=None, assistant_mode=None, language=None):
 	_ensure_user()
-	name = _create_session(title=title, assistant_mode=assistant_mode)
+	name = _create_session(title=title, assistant_mode=assistant_mode, language=language)
 	return ok({"name": name})
 
 
-def _create_session(title=None, assistant_mode=None):
+@frappe.whitelist()
+def set_language(session=None, language=None):
+	_ensure_user()
+	if not session:
+		return fail("session required")
+	_assert_session_access(session)
+	from chat_ai.core.i18n import normalize_language
+
+	doc = frappe.get_doc("AI Chat Session", session)
+	doc.language = normalize_language(language)
+	doc.save(ignore_permissions=True)
+	return ok({"language": doc.language})
+
+
+@frappe.whitelist()
+def get_ui_locale():
+	"""Language/voice prefs for the Desk sidebar."""
+	_ensure_user()
+	from chat_ai.core.i18n import LANGUAGES, normalize_language
+
+	lang = "en"
+	voice_in = 1
+	voice_out = 1
+	auto_speak = 0
+	try:
+		lang = normalize_language(frappe.db.get_single_value("Chat AI Settings", "default_language"))
+		voice_in = int(frappe.db.get_single_value("Chat AI Settings", "enable_voice_input") or 0)
+		voice_out = int(frappe.db.get_single_value("Chat AI Settings", "enable_voice_output") or 0)
+		auto_speak = int(frappe.db.get_single_value("Chat AI Settings", "auto_speak_replies") or 0)
+	except Exception:
+		pass
+	return ok(
+		{
+			"language": lang,
+			"languages": [
+				{"code": m["code"], "label": m["label"], "native": m["native"], "bcp47": m["bcp47"], "dir": m["dir"]}
+				for m in LANGUAGES.values()
+			],
+			"enable_voice_input": voice_in,
+			"enable_voice_output": voice_out,
+			"auto_speak_replies": auto_speak,
+		}
+	)
+
+
+def _create_session(title=None, assistant_mode=None, language=None):
+	from chat_ai.core.i18n import normalize_language
+
 	settings_mode = None
+	settings_lang = "en"
 	try:
 		settings_mode = frappe.db.get_single_value("Chat AI Settings", "default_assistant_mode")
+		settings_lang = normalize_language(frappe.db.get_single_value("Chat AI Settings", "default_language"))
 	except Exception:
 		pass
 	doc = frappe.get_doc(
@@ -183,6 +232,7 @@ def _create_session(title=None, assistant_mode=None):
 			"title": title or "New chat",
 			"user": frappe.session.user,
 			"assistant_mode": assistant_mode or settings_mode or "ERP Assistant",
+			"language": normalize_language(language or settings_lang),
 			"status": "Active",
 		}
 	)

@@ -56,6 +56,9 @@
   "enable_document_events",
   "enable_workflow_events",
   "enable_chat_notifications",
+  "enable_voice_input",
+  "enable_voice_output",
+  "auto_speak_replies",
   "search_section",
   "enable_erp_search",
   "enable_global_search",
@@ -153,8 +156,11 @@
   },
   {
    "fieldname": "default_language",
-   "fieldtype": "Data",
-   "label": "Default Language"
+   "fieldtype": "Select",
+   "label": "Default Language",
+   "options": "en\nar\nml",
+   "default": "en",
+   "description": "Chat reply language: en English, ar Arabic, ml Malayalam"
   },
   {
    "fieldname": "max_history_length",
@@ -364,6 +370,24 @@
    "fieldname": "enable_chat_notifications",
    "fieldtype": "Check",
    "label": "Enable Chat Notifications",
+   "default": "0"
+  },
+  {
+   "fieldname": "enable_voice_input",
+   "fieldtype": "Check",
+   "label": "Enable Voice Input",
+   "default": "1"
+  },
+  {
+   "fieldname": "enable_voice_output",
+   "fieldtype": "Check",
+   "label": "Enable Voice Output (TTS)",
+   "default": "1"
+  },
+  {
+   "fieldname": "auto_speak_replies",
+   "fieldtype": "Check",
+   "label": "Auto-Speak Assistant Replies",
    "default": "0"
   },
   {

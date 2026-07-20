@@ -37,6 +37,8 @@ def load_skills():
 
 
 def get_prompt_text(settings: dict, skill_prompts: list[str] | None = None) -> str:
+	from chat_ai.core.i18n import language_prompt
+
 	version = settings.get("prompt_bundle_version") or "v1"
 	base = Path(__file__).resolve().parents[1] / "core" / "prompts" / version / "assistant.md"
 	if not base.exists():
@@ -44,6 +46,8 @@ def get_prompt_text(settings: dict, skill_prompts: list[str] | None = None) -> s
 	text = base.read_text() if base.exists() else "You are an ERPNext AI Assistant."
 	mode = settings.get("_assistant_mode") or settings.get("default_assistant_mode") or "ERP Assistant"
 	text += f"\n\nActive assistant mode: {mode}."
+	lang = settings.get("_language") or settings.get("default_language") or "en"
+	text += "\n\n" + language_prompt(lang)
 	for p in skill_prompts or []:
 		if p:
 			text += "\n\n" + p
@@ -89,7 +93,12 @@ def run_turn(
 	if session.user != frappe.session.user and "System Manager" not in frappe.get_roles():
 		frappe.throw("Not permitted", frappe.PermissionError)
 
+	from chat_ai.core.i18n import normalize_language
+
 	settings["_assistant_mode"] = session.assistant_mode
+	settings["_language"] = normalize_language(
+		getattr(session, "language", None) or settings.get("default_language") or "en"
+	)
 	limits = AgentLimits.from_settings(settings)
 	policy = ConfirmationPolicy.from_settings(settings)
 

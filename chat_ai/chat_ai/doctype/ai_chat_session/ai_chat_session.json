@@ -7,6 +7,7 @@
   "title",
   "user",
   "assistant_mode",
+  "language",
   "status",
   "is_pinned",
   "last_message_at",
@@ -32,6 +33,13 @@
    "label": "Assistant Mode",
    "options": "Normal Chat\nERP Assistant\nDocument Assistant\nAnalytics Assistant\nDeveloper Assistant\nAdmin Assistant",
    "default": "ERP Assistant"
+  },
+  {
+   "fieldname": "language",
+   "fieldtype": "Select",
+   "label": "Language",
+   "options": "en\nar\nml",
+   "default": "en"
   },
   {
    "fieldname": "status",

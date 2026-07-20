@@ -106,6 +106,12 @@ def _ensure_settings():
 			doc.provider = "OpenAI"
 		if not doc.default_model:
 			doc.default_model = "gpt-4o"
+		if not getattr(doc, "default_language", None):
+			doc.default_language = "en"
+		if getattr(doc, "enable_voice_input", None) is None:
+			doc.enable_voice_input = 1
+		if getattr(doc, "enable_voice_output", None) is None:
+			doc.enable_voice_output = 1
 		doc.save(ignore_permissions=True)
 	except Exception:
 		frappe.log_error(title="chat_ai ensure settings")

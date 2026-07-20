@@ -52,6 +52,49 @@
 	transform: translateX(0);
 }
 
+.cai-panel--rtl {
+	text-align: right;
+}
+
+.cai-panel--rtl .cai-msg--user {
+	align-self: flex-start;
+}
+
+.cai-panel--rtl .cai-msg--assistant {
+	align-self: flex-end;
+}
+
+.cai-panel--rtl .cai-msg--user .cai-bubble {
+	border-bottom-right-radius: 14px;
+	border-bottom-left-radius: 4px;
+}
+
+.cai-panel--rtl .cai-msg--assistant .cai-bubble {
+	border-bottom-left-radius: 14px;
+	border-bottom-right-radius: 4px;
+}
+
+.cai-composer-actions {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	align-self: end;
+}
+
+.cai-mic--on {
+	background: #c0392b !important;
+	border-color: #c0392b !important;
+	color: #fff !important;
+}
+
+.cai-voice-actions {
+	margin-top: 8px;
+}
+
+.cai-header .cai-mode {
+	max-width: 110px;
+}
+
 .cai-header {
 	display: flex;
 	align-items: center;
@@ -59,6 +102,7 @@
 	padding: 12px 12px 12px 14px;
 	border-bottom: 1px solid var(--border-color, #e2e6ed);
 	background: var(--subtle-fg, transparent);
+	flex-wrap: wrap;
 }
 
 .cai-brand {
@@ -266,13 +310,16 @@
 	padding: 10px;
 	display: grid;
 	grid-template-columns: 1fr auto;
+	grid-template-rows: auto;
 	gap: 8px;
+	align-items: end;
 	position: relative;
 	background: var(--card-bg, #fff);
 }
 
 .cai-input {
-	grid-column: 1 / 2;
+	grid-column: 1;
+	grid-row: 1;
 	width: 100%;
 	min-height: 48px;
 	resize: none;
@@ -283,6 +330,11 @@
 	font-family: inherit;
 	background: var(--control-bg, #fff);
 	color: inherit;
+}
+
+.cai-composer-actions {
+	grid-column: 2;
+	grid-row: 1;
 }
 
 .cai-input:focus {
