@@ -92,9 +92,4 @@ def _copy_tree(src: str, dest: str) -> None:
 		d = os.path.join(dest, name)
 		if not os.path.isdir(s):
 			continue
-		os.makedirs(d, exist_ok=True)
-		for fname in os.listdir(s):
-			sf = os.path.join(s, fname)
-			df = os.path.join(d, fname)
-			if os.path.isfile(sf):
-				shutil.copy2(sf, df)
+		shutil.copytree(s, d, dirs_exist_ok=True)

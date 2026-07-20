@@ -13,7 +13,10 @@ required_apps = ["erpnext"]
 after_install = "chat_ai.install.after_install"
 after_migrate = "chat_ai.install.after_migrate"
 
-app_include_js = ["/assets/chat_ai/js/chat_ai_sidebar.js"]
+app_include_js = [
+	"/assets/chat_ai/js/chat_ai_vue.js",
+	"/assets/chat_ai/js/chat_ai_sidebar_app.js",
+]
 app_include_css = ["/assets/chat_ai/css/chat_ai_sidebar.css"]
 
 doc_events = {
