@@ -1,27 +1,40 @@
-/* Chat AI — Vue slide-out (cai-*) */
+/* Chat AI — Vue slide-out (cai-*)
+ * --cai-top is set in JS to sit below navbar + page-head (Save/Submit).
+ */
+
+.cai-shell {
+	--cai-top: calc(var(--navbar-height, 48px) + 52px);
+}
 
 .cai-launcher {
 	position: fixed;
-	right: 22px;
-	bottom: 22px;
+	top: var(--cai-top);
+	right: 16px;
+	bottom: auto;
 	z-index: 1000;
-	width: 52px;
-	height: 52px;
+	width: 44px;
+	height: 44px;
 	border: none;
-	border-radius: 16px;
+	border-radius: 12px;
 	background: var(--primary, #171717);
 	color: var(--fg-color, #fff);
 	cursor: pointer;
-	box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
+	box-shadow: 0 6px 20px rgba(0, 0, 0, 0.16);
 	display: flex;
 	align-items: center;
 	justify-content: center;
-	transition: transform 0.15s ease, box-shadow 0.15s ease;
+	transition: transform 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease, top 0.15s ease;
 }
 
 .cai-launcher:hover {
 	transform: translateY(-1px);
-	box-shadow: 0 10px 32px rgba(0, 0, 0, 0.22);
+	box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+}
+
+.cai-launcher--hidden {
+	opacity: 0;
+	pointer-events: none;
+	transform: scale(0.92);
 }
 
 .cai-launcher-mark,
@@ -33,19 +46,22 @@
 
 .cai-panel {
 	position: fixed;
-	top: 0;
+	top: var(--cai-top);
 	right: 0;
 	width: min(420px, 100vw);
-	height: 100vh;
+	height: calc(100vh - var(--cai-top));
+	max-height: calc(100dvh - var(--cai-top));
 	z-index: 1001;
 	display: flex;
 	flex-direction: column;
 	background: var(--card-bg, var(--bg-color, #fff));
 	color: var(--text-color, #1f272e);
 	border-left: 1px solid var(--border-color, #e2e6ed);
+	border-top: 1px solid var(--border-color, #e2e6ed);
+	border-top-left-radius: 12px;
 	box-shadow: -12px 0 40px rgba(0, 0, 0, 0.12);
 	transform: translateX(105%);
-	transition: transform 0.22s cubic-bezier(0.22, 1, 0.36, 1);
+	transition: transform 0.22s cubic-bezier(0.22, 1, 0.36, 1), top 0.15s ease, height 0.15s ease;
 }
 
 .cai-panel--open {

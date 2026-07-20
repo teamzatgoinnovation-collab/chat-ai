@@ -158,11 +158,14 @@ chat_ai.sidebar.AppOptions = {
 	async mounted() {
 		chat_ai.sidebar._vm = this;
 		this.bindRealtime();
+		this.bindLayout();
+		this.updateLayoutOffset();
 		await this.loadLocale();
 		this.loadCommands();
 		if (this.open && !this.session) this.newSession();
 	},
 	beforeUnmount() {
+		this.unbindLayout();
 		this.stopListening();
 		this.stopSpeaking();
 	},
@@ -172,6 +175,49 @@ chat_ai.sidebar.AppOptions = {
 		},
 		formatText(s) {
 			return this.esc(s).replace(/\n/g, "<br>");
+		},
+		/** Keep panel below navbar + form page-head so Save/Submit stay clickable. */
+		updateLayoutOffset() {
+			const shell = this.$el;
+			if (!shell) return;
+			let top = 0;
+			const nav = document.querySelector(".navbar");
+			if (nav) {
+				const r = nav.getBoundingClientRect();
+				top = Math.max(top, r.bottom);
+			}
+			const head = document.querySelector(".page-head");
+			if (head) {
+				const r = head.getBoundingClientRect();
+				/* sticky page-head while near the top of the viewport */
+				if (r.height > 0 && r.top < 160 && r.bottom > top) {
+					top = Math.max(top, r.bottom);
+				}
+			}
+			if (!top) {
+				top = 48 + 52;
+			}
+			shell.style.setProperty("--cai-top", `${Math.ceil(top + 4)}px`);
+		},
+		bindLayout() {
+			this._onLayout = () => this.updateLayoutOffset();
+			window.addEventListener("resize", this._onLayout);
+			window.addEventListener("scroll", this._onLayout, true);
+			if (frappe.router && frappe.router.on) {
+				frappe.router.on("change", this._onLayout);
+			} else if (frappe.after_ajax) {
+				/* fallback: remeasure after route paints */
+			}
+			$(document).on("page-change.chat_ai_layout form-load.chat_ai_layout", this._onLayout);
+			this._layoutTimer = setInterval(() => this.updateLayoutOffset(), 1500);
+		},
+		unbindLayout() {
+			if (this._onLayout) {
+				window.removeEventListener("resize", this._onLayout);
+				window.removeEventListener("scroll", this._onLayout, true);
+				$(document).off(".chat_ai_layout");
+			}
+			if (this._layoutTimer) clearInterval(this._layoutTimer);
 		},
 		async loadLocale() {
 			try {
@@ -191,6 +237,7 @@ chat_ai.sidebar.AppOptions = {
 		toggle(force) {
 			this.open = typeof force === "boolean" ? force : !this.open;
 			localStorage.setItem("chat_ai_open", this.open ? "1" : "0");
+			this.$nextTick(() => this.updateLayoutOffset());
 			if (this.open && !this.session) this.newSession();
 			if (this.open) {
 				this.$nextTick(() => {
@@ -468,6 +515,7 @@ chat_ai.sidebar.AppOptions = {
   <button
     type="button"
     class="cai-launcher"
+    :class="{ 'cai-launcher--hidden': open }"
     title="Chat AI (Ctrl+Shift+J)"
     aria-label="Open Chat AI"
     @click="toggle()"
