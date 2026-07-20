@@ -19,6 +19,16 @@ app_include_js = [
 ]
 app_include_css = ["/assets/chat_ai/css/chat_ai_sidebar.css"]
 
+add_to_apps_screen = [
+	{
+		"name": "chat_ai",
+		"logo": "/assets/chat_ai/images/chat_ai.svg",
+		"title": "Chat AI",
+		"route": "/app/ai-admin",
+		"has_permission": "chat_ai.install.has_app_permission",
+	}
+]
+
 doc_events = {
 	"*": {
 		"on_update": "chat_ai.erpnext.events.document_events.on_update",

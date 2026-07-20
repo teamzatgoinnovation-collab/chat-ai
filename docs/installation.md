@@ -1,38 +1,54 @@
 # Installation
 
+Chat AI is a self-contained Frappe app. **No `bench build` / Node** — Desk UI is static Vue under `public/`.
+
 ```bash
 bench get-app https://github.com/teamzatgoinnovation-collab/chat-ai.git
-# confirm chat_ai appears in sites/apps.txt (bench get-app normally adds it)
 bench --site <site> install-app chat_ai
-bench --site <site> migrate
-bench --site <site> clear-cache
-bench build --app chat_ai
+# install hooks: roles, Module Def, Desktop Icon, asset copy, cache clear
+bench --site <site> migrate   # safe to re-run after git pull
 ```
 
-If Desk returns Internal Server Error or DocTypes fail with `Module Chat AI not found`, ensure `sites/apps.txt` lists `chat_ai`, then:
+Then open Desk → **AI Admin** (or floating **AI** / Ctrl+Shift+J) → **Chat AI Settings** → set Provider + API Key.
+
+### After every `git pull` on the bench
 
 ```bash
-bench --site <site> clear-cache
+cd apps/chat_ai && git pull && cd ../..
 bench --site <site> migrate
 ```
 
-1. Open **Chat AI Settings** and set Provider, API Key, Model.
-2. Assign roles **Chat AI User** / **Chat AI Manager**.
-3. Hard-refresh Desk — floating **AI** launcher (bottom-right) or **Ctrl+Shift+J** opens the Vue slide-out.
-4. Managers: open workspace **AI Admin** for sessions, usage, tool logs, provider health.
+### frappe_docker only (frontend asset 404)
 
-### frappe_docker: floating AI button 404
-
-Frontend often cannot see `apps/chat_ai`. After install/migrate, sync assets into the frontend container:
+Frontend has no `apps/` mount. One command from the app repo (or host):
 
 ```bash
-docker exec frappe_docker-backend-1 bash -lc \
-  'cp -a apps/chat_ai/chat_ai/public/. sites/chat_ai_assets/'
-docker exec frappe_docker-frontend-1 bash -lc \
-  'mkdir -p assets/chat_ai && cp -a sites/chat_ai_assets/. assets/chat_ai/'
-# confirm Vue bundle + sidebar
-curl -I https://<site>/assets/chat_ai/js/vendor/vue.global.prod.js
+# from apps/chat_ai on the Docker host
+bash deploy/sync_frontend_assets.sh
+# or override container names:
+# BACKEND_CONTAINER=erpnext-backend-1 FRONTEND_CONTAINER=erpnext-frontend-1 bash deploy/sync_frontend_assets.sh
+```
+
+Confirm:
+
+```bash
 curl -I https://<site>/assets/chat_ai/js/chat_ai_sidebar_app.js
 ```
 
-Then hard-refresh Desk (Ctrl+Shift+R).
+Hard-refresh Desk (Ctrl+Shift+R).
+
+### What install/migrate auto-does
+
+- Creates roles **Chat AI User** / **Chat AI Manager** and assigns both to Administrator
+- Ensures Module Def + Desktop Icon (**AI Admin**)
+- Copies `public/` → `sites/chat_ai_assets` + backend `assets/chat_ai`
+- Sanitizes bad provider configs (OpenRouter key / Custom→localhost)
+- Clears site cache
+
+### Manual (unavoidable)
+
+| Step | Why |
+|------|-----|
+| Provider API key in Settings | Secrets never ship in git |
+| `sync_frontend_assets.sh` on frappe_docker | Compose volume layout |
+| Hard-refresh browser | Desk asset cache |
