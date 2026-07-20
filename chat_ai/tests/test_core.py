@@ -5,9 +5,13 @@ from __future__ import annotations
 import unittest
 
 from chat_ai.core.agent_limits import AgentLimits
+from chat_ai.core.planner import Plan, _parse_plan
 from chat_ai.core.providers.capabilities import Capabilities, negotiate
+from chat_ai.core.response import plan_approval
 from chat_ai.core.tool_router import ToolRouter
 from chat_ai.core.tool_router.spec import CATEGORY_READ, CATEGORY_WRITE, ConfirmationPolicy, ToolSpec
+from chat_ai.core.approval import is_plan_approval_text
+from chat_ai.core.tool_enrichment import enrich_tool_args
 
 
 class TestCapabilities(unittest.TestCase):
@@ -25,15 +29,30 @@ class TestCapabilities(unittest.TestCase):
 
 
 class TestConfirmation(unittest.TestCase):
-	def test_write_requires_confirm(self):
+	def test_write_requires_confirm_medium(self):
+		policy = ConfirmationPolicy(require_confirmation_for_writes=True)
+		tool = ToolSpec(name="create_sales_order", description="x", category=CATEGORY_WRITE)
+		self.assertTrue(policy.needs_confirmation(tool, {}, risk_level="medium"))
+
+	def test_low_risk_task_skips_confirm(self):
 		policy = ConfirmationPolicy(require_confirmation_for_writes=True)
 		tool = ToolSpec(name="create_task", description="x", category=CATEGORY_WRITE)
-		self.assertTrue(policy.needs_confirmation(tool, {}))
+		self.assertFalse(policy.needs_confirmation(tool, {}, risk_level="low"))
+
+	def test_high_risk_always_confirms(self):
+		policy = ConfirmationPolicy(require_confirmation_for_writes=True)
+		tool = ToolSpec(name="create_task", description="x", category=CATEGORY_WRITE)
+		self.assertTrue(policy.needs_confirmation(tool, {}, risk_level="high"))
 
 	def test_read_no_confirm(self):
 		policy = ConfirmationPolicy()
 		tool = ToolSpec(name="get_tasks", description="x", category=CATEGORY_READ)
 		self.assertFalse(policy.needs_confirmation(tool, {}))
+
+	def test_bulk_names_confirm(self):
+		policy = ConfirmationPolicy()
+		tool = ToolSpec(name="update_document", description="x", category=CATEGORY_WRITE)
+		self.assertTrue(policy.needs_confirmation(tool, {"names": ["A", "B"]}, risk_level="low"))
 
 
 class TestToolRouter(unittest.TestCase):
@@ -68,6 +87,55 @@ class TestToolRouter(unittest.TestCase):
 		self.assertTrue(r.needs_confirmation)
 		r2 = router.run("create_x", {}, confirmed=True)
 		self.assertTrue(r2.ok)
+
+
+class TestEnrichment(unittest.TestCase):
+	def test_enrich_does_not_override(self):
+		tool = ToolSpec(name="create_document", description="x", category=CATEGORY_WRITE)
+		ctx = {"intelligent_defaults": {"company": "Acme", "warehouse": "Stores - A"}}
+		args = enrich_tool_args(tool, {"values": {"company": "Other"}}, ctx)
+		self.assertEqual(args["values"]["company"], "Other")
+
+	def test_enrich_fills_missing(self):
+		tool = ToolSpec(name="create_document", description="x", category=CATEGORY_WRITE)
+		ctx = {"intelligent_defaults": {"company": "Acme", "warehouse": "Stores - A"}}
+		args = enrich_tool_args(tool, {"values": {"title": "Test"}}, ctx)
+		self.assertEqual(args["values"]["company"], "Acme")
+		self.assertEqual(args["values"]["warehouse"], "Stores - A")
+
+
+class TestPlanner(unittest.TestCase):
+	def test_parse_plan_extended_fields(self):
+		raw = """{
+			"intent": "create project",
+			"is_simple_question": false,
+			"risk_level": "high",
+			"assumptions": ["Using Company: Acme"],
+			"implementation_plan": ["Create Project", "Add tasks"],
+			"needs_plan_approval": true,
+			"needs_clarification": false,
+			"candidate_skills": ["projects", "core"]
+		}"""
+		plan = _parse_plan(raw, ["projects", "core"], {"assumptions": []})
+		self.assertTrue(plan.needs_plan_approval)
+		self.assertEqual(plan.risk_level, "high")
+		self.assertEqual(len(plan.implementation_plan), 2)
+
+
+class TestPlanApprovalResponse(unittest.TestCase):
+	def test_plan_approval_shape(self):
+		resp = plan_approval("Proceed?", ["Step 1", "Step 2"], ["Using Company: X"], token="abc")
+		cj = resp.to_content_json()
+		self.assertTrue(cj["needs_plan_approval"])
+		self.assertEqual(cj["pending_plan"], ["Step 1", "Step 2"])
+		self.assertEqual(cj["confirmation_token"], "abc")
+
+
+class TestPlanApprovalText(unittest.TestCase):
+	def test_ok_variants(self):
+		self.assertTrue(is_plan_approval_text("OK"))
+		self.assertTrue(is_plan_approval_text("yes"))
+		self.assertFalse(is_plan_approval_text("maybe"))
 
 
 class TestAgentLimits(unittest.TestCase):

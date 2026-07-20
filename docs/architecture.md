@@ -28,6 +28,23 @@ Features enable/disable from discovered capabilities.
 ## Safety
 
 - Tool categories: Read / Write / Admin
-- Confirmation policy for submit/cancel/delete/workflow/financial
+- **Prompt bundle v3** (default): concise ERP consultant behavior, intelligent defaults, plan-before-change
+- **Tiered confirmation:** low-risk single creates (e.g. Task) skip confirm; medium/high always confirm
+- **Plan approval:** multi-step mutations show numbered plan + OK/Cancel before tools run
+- **Confirmation tokens:** server-side cache tokens; client cannot forge `confirmed=1` alone
 - Agent loop limits in Chat AI Settings
 - Approval Engine for workflow actions
+
+## Intelligent defaults
+
+`erpnext/context/defaults.py` resolves Company, Branch, Warehouse, Currency, Fiscal Year:
+user default → single record on site → omit.
+
+Injected into context as `intelligent_defaults` + `assumptions`, merged into tool args via `core/tool_enrichment.py` (never overrides explicit values).
+
+## Decision flow (v3)
+
+1. Planner returns `is_simple_question`, `needs_plan_approval`, `risk_level`, `implementation_plan`
+2. Simple questions → direct LLM answer (no tools)
+3. Plan required → show plan + token; resume on OK
+4. Tool loop with enriched args and risk-tier confirmation

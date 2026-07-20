@@ -14,11 +14,20 @@ from chat_ai.core.memory import ConversationMemory
 from chat_ai.core.planner import plan as run_planner
 from chat_ai.core.providers.base import LLMMessage
 from chat_ai.core.providers.registry import ProviderRegistry
-from chat_ai.core.response import AssistantResponse, build_from_tool_results, clarification, confirmation
+from chat_ai.core.response import (
+	AssistantResponse,
+	build_from_tool_results,
+	clarification,
+	confirmation,
+	plan_approval,
+)
 from chat_ai.core.skills import clear_skills, discover, list_skills
 from chat_ai.core.tool_router import ToolRouter
 from chat_ai.core.tool_router.spec import ConfirmationPolicy, ToolSpec
+from chat_ai.erpnext.confirmation_tokens import consume_token, issue_token
+from chat_ai.core.approval import is_plan_approval_text
 from chat_ai.erpnext.context import build_context_stack
+from chat_ai.core.tool_enrichment import enrich_tool_args
 from chat_ai.erpnext.events.realtime_events import publish_progress, publish_stream
 from chat_ai.erpnext.settings import get_settings_dict
 
@@ -36,16 +45,31 @@ def load_skills():
 	)
 
 
+_MODE_ADDENDA = {
+	"Document Assistant": "document",
+	"Analytics Assistant": "analytics",
+	"Developer Assistant": "developer",
+	"Admin Assistant": "admin",
+}
+
+
 def get_prompt_text(settings: dict, skill_prompts: list[str] | None = None) -> str:
 	from chat_ai.core.i18n import language_prompt
 
-	version = settings.get("prompt_bundle_version") or "v1"
-	base = Path(__file__).resolve().parents[1] / "core" / "prompts" / version / "assistant.md"
+	version = settings.get("prompt_bundle_version") or "v3"
+	base_dir = Path(__file__).resolve().parents[1] / "core" / "prompts" / version
+	base = base_dir / "assistant.md"
 	if not base.exists():
 		base = Path(__file__).resolve().parents[1] / "core" / "prompts" / "v1" / "assistant.md"
 	text = base.read_text() if base.exists() else "You are an ERPNext AI Assistant."
 	mode = settings.get("_assistant_mode") or settings.get("default_assistant_mode") or "ERP Assistant"
 	text += f"\n\nActive assistant mode: {mode}."
+	# Mode-specific addenda (v3+)
+	mode_key = _MODE_ADDENDA.get(mode)
+	if mode_key and version == "v3":
+		mode_file = base_dir / "modes" / f"{mode_key}.md"
+		if mode_file.exists():
+			text += "\n\n" + mode_file.read_text()
 	lang = settings.get("_language") or settings.get("default_language") or "en"
 	text += "\n\n" + language_prompt(lang)
 	for p in skill_prompts or []:
@@ -87,6 +111,8 @@ def run_turn(
 	confirmed: bool = False,
 	pending_tool: str | None = None,
 	pending_args: dict | None = None,
+	plan_confirmed: bool = False,
+	confirmation_token: str | None = None,
 ) -> dict:
 	settings = get_settings_dict()
 	session = frappe.get_doc("AI Chat Session", session_name)
@@ -102,17 +128,14 @@ def run_turn(
 	limits = AgentLimits.from_settings(settings)
 	policy = ConfirmationPolicy.from_settings(settings)
 
-	# Load memory
 	memory = _load_memory(session_name)
 	context = build_context_stack(client_context, memory.entities)
 	load_skills()
 	available = [s.name for s in list_skills()]
 
-	# Command hint
 	msg = user_message
 	if command:
 		msg = f"/{command} {user_message}".strip()
-		# bias skill from command
 		cmd_skill = {
 			"task": "projects",
 			"project": "projects",
@@ -120,22 +143,49 @@ def run_turn(
 			"invoice": "accounts",
 			"stock": "inventory",
 		}.get(command)
-		if cmd_skill and cmd_skill in available:
-			candidate_override = [cmd_skill, "core"]
-		else:
-			candidate_override = None
+		candidate_override = [cmd_skill, "core"] if cmd_skill and cmd_skill in available else None
 	else:
 		candidate_override = None
 
 	publish_progress(session_name, "planning")
 
-	# Confirmation resume path
+	# --- Token-based tool confirmation resume ---
+	if confirmation_token and confirmed:
+		stored = consume_token(session_name, confirmation_token, expected_kind="tool")
+		if stored:
+			pending_tool = stored.get("tool") or pending_tool
+			pending_args = stored.get("args") or pending_args or {}
+			confirmed = True
+
+	# --- Token-based plan approval resume ---
+	approved_plan = None
+	if confirmation_token and (plan_confirmed or is_plan_approval_text(user_message)):
+		stored = consume_token(session_name, confirmation_token, expected_kind="plan")
+		if stored:
+			approved_plan = stored.get("plan") or []
+			plan_confirmed = True
+			msg = stored.get("original_message") or msg
+
 	if confirmed and pending_tool:
 		tools = collect_tools(available)
-		router = ToolRouter(tools, policy=policy, limits=limits, progress=lambda s, d="": publish_progress(session_name, s, d))
-		result = router.run(pending_tool, pending_args or {}, confirmed=True)
-		_log_tool(session_name, pending_tool, pending_args or {}, result)
-		resp = build_from_tool_results([{"ok": result.ok, "tool": pending_tool, "data": result.data, "error": result.error}])
+		router = ToolRouter(
+			tools,
+			policy=policy,
+			limits=limits,
+			progress=lambda s, d="": publish_progress(session_name, s, d),
+		)
+		tool_spec = router.get(pending_tool)
+		enriched = enrich_tool_args(tool_spec, pending_args or {}, context)
+		result = router.run(
+			pending_tool,
+			enriched,
+			confirmed=True,
+			risk_level="medium",
+		)
+		_log_tool(session_name, pending_tool, enriched, result)
+		resp = build_from_tool_results(
+			[{"ok": result.ok, "tool": pending_tool, "data": result.data, "error": result.error}]
+		)
 		return _persist(session, memory, user_message, resp, settings, tokens=(0, 0))
 
 	provider = ProviderRegistry.get_active(settings)
@@ -159,7 +209,35 @@ def run_turn(
 		resp = clarification(plan.clarification_question or "Could you provide more details?")
 		return _persist(session, memory, user_message, resp, settings, tokens=(plan.tokens_in, plan.tokens_out), model=plan.model)
 
+	# Simple question — direct answer without tools
+	if plan.is_simple_question and not plan.needs_plan_approval:
+		resp = _direct_answer(provider, settings, msg, context, history, plan)
+		return _persist(session, memory, user_message, resp, settings, tokens=(plan.tokens_in, plan.tokens_out), model=plan.model)
+
+	# Plan approval gate (unless already approved via token)
+	if plan.needs_plan_approval and not plan_confirmed and not approved_plan:
+		token = issue_token(
+			session_name,
+			{
+				"kind": "plan",
+				"plan": plan.implementation_plan,
+				"assumptions": plan.assumptions,
+				"original_message": msg,
+				"candidate_skills": plan.candidate_skills,
+				"risk_level": plan.risk_level,
+			},
+		)
+		resp = plan_approval(
+			"I'll proceed with this plan after you confirm:",
+			plan.implementation_plan,
+			plan.assumptions,
+			token=token,
+		)
+		return _persist(session, memory, user_message, resp, settings, tokens=(plan.tokens_in, plan.tokens_out), model=plan.model)
+
 	candidates = candidate_override or plan.candidate_skills or ["core"]
+	if approved_plan:
+		msg = msg + "\n\n[Approved plan]\n" + "\n".join(f"- {s}" for s in approved_plan)
 	skills = [s for s in list_skills() if s.name in candidates]
 	for s in skills:
 		if s.prompt:
@@ -167,22 +245,34 @@ def run_turn(
 
 	publish_progress(session_name, "routing")
 	tools = collect_tools(candidates)
-	router = ToolRouter(tools, policy=policy, limits=limits, progress=lambda s, d="": publish_progress(session_name, s, d))
+	router = ToolRouter(
+		tools,
+		policy=policy,
+		limits=limits,
+		progress=lambda s, d="": publish_progress(session_name, s, d),
+	)
+	risk_level = plan.risk_level or "medium"
 
-	# If tool calling disabled or unsupported — respond with plan intent only / search
 	if not settings.get("enable_tool_calling", 1) or not provider.capabilities.tool_calling:
-		# Try a single search if query-like
 		if "search" in router.tools:
-			sr = router.run("search", {"query": user_message}, confirmed=True)
+			args = enrich_tool_args(router.get("search"), {"query": user_message}, context)
+			sr = router.run("search", args, confirmed=True, risk_level=risk_level)
 			resp = build_from_tool_results([{"ok": sr.ok, "tool": "search", "data": sr.data, "error": sr.error}])
 		else:
 			resp = AssistantResponse(markdown=plan.raw_content or f"Intent: {plan.intent}")
 		return _persist(session, memory, user_message, resp, settings, tokens=(plan.tokens_in, plan.tokens_out), model=plan.model)
 
 	openai_tools = router.list_openai_tools()
+	assumption_note = ""
+	if plan.assumptions:
+		assumption_note = "Assumptions:\n" + "\n".join(f"- {a}" for a in plan.assumptions[:5])
 	messages = [
 		LLMMessage(role="system", content=get_prompt_text(settings, skill_prompts)),
-		LLMMessage(role="system", content="Context:\n" + json.dumps(context, default=str)[:6000]),
+		LLMMessage(
+			role="system",
+			content="Context:\n" + json.dumps(context, default=str)[:6000]
+			+ (("\n\n" + assumption_note) if assumption_note else ""),
+		),
 	]
 	for h in history[-10:]:
 		messages.append(LLMMessage(role=h["role"], content=h["content"]))
@@ -200,7 +290,10 @@ def run_turn(
 			publish_stream(session_name, result.content, done=False)
 
 		if not result.tool_calls:
-			resp = AssistantResponse(markdown=result.content or "Done.")
+			md = result.content or "Done."
+			if plan.assumptions and plan.assumptions[0] not in md:
+				md = "\n".join(plan.assumptions[:3]) + "\n\n" + md
+			resp = AssistantResponse(markdown=md)
 			publish_progress(session_name, "done")
 			publish_stream(session_name, "", done=True)
 			return _persist(session, memory, user_message, resp, settings, tokens=(total_in, total_out), model=result.model)
@@ -216,10 +309,16 @@ def run_turn(
 				args = json.loads(raw_args) if isinstance(raw_args, str) else (raw_args or {})
 			except json.JSONDecodeError:
 				args = {}
-			tr = router.run(name, args, confirmed=False)
+			tool_spec = router.get(name)
+			args = enrich_tool_args(tool_spec, args, context)
+			tr = router.run(name, args, confirmed=False, risk_level=risk_level)
 			_log_tool(session_name, name, args, tr)
 			if tr.needs_confirmation:
-				resp = confirmation(tr.confirmation_message, name, args)
+				token = issue_token(
+					session_name,
+					{"kind": "tool", "tool": name, "args": args},
+				)
+				resp = confirmation(tr.confirmation_message, name, args, token=token)
 				publish_progress(session_name, "done")
 				return _persist(session, memory, user_message, resp, settings, tokens=(total_in, total_out), model=result.model)
 			tool_results.append({"ok": tr.ok, "tool": name, "data": tr.data, "error": tr.error})
@@ -234,11 +333,33 @@ def run_turn(
 				)
 			)
 
-	# After loop — build from last tool results
 	resp = build_from_tool_results(tool_results, preface="Here is what I found:")
+	if plan.assumptions:
+		resp.markdown = "\n".join(plan.assumptions[:3]) + "\n\n" + resp.markdown
 	publish_progress(session_name, "done")
 	publish_stream(session_name, resp.markdown, done=True)
 	return _persist(session, memory, user_message, resp, settings, tokens=(total_in, total_out))
+
+
+def _direct_answer(provider, settings, msg, context, history, plan):
+	"""Answer simple how-to / explanation questions without tool calls."""
+	messages = [
+		LLMMessage(role="system", content=get_prompt_text(settings)),
+		LLMMessage(role="system", content="Context:\n" + json.dumps(context, default=str)[:4000]),
+	]
+	for h in (history or [])[-6:]:
+		messages.append(LLMMessage(role=h["role"], content=h["content"]))
+	messages.append(
+		LLMMessage(
+			role="user",
+			content=msg + "\n\n(Answer concisely. No tools. No long documentation.)",
+		)
+	)
+	result = provider.chat(messages)
+	md = result.content or plan.raw_content or "Done."
+	if plan.assumptions:
+		md = "\n".join(plan.assumptions[:3]) + "\n\n" + md
+	return AssistantResponse(markdown=md)
 
 
 def _load_memory(session_name: str) -> ConversationMemory:
@@ -283,7 +404,7 @@ def _persist(session, memory, user_message, resp: AssistantResponse, settings, t
 			"content_json": frappe.as_json(resp.to_content_json()),
 			"model": model,
 			"provider": settings.get("provider"),
-			"prompt_version": settings.get("prompt_bundle_version") or "v1",
+			"prompt_version": settings.get("prompt_bundle_version") or "v3",
 			"tokens_in": tokens[0],
 			"tokens_out": tokens[1],
 			"latency_ms": int((time.time() - start) * 1000),
@@ -310,6 +431,10 @@ def _persist(session, memory, user_message, resp: AssistantResponse, settings, t
 		"confirmation_message": resp.confirmation_message,
 		"pending_tool": resp.pending_tool,
 		"pending_args": resp.pending_args,
+		"needs_plan_approval": resp.needs_plan_approval,
+		"pending_plan": resp.pending_plan,
+		"pending_assumptions": resp.pending_assumptions,
+		"confirmation_token": resp.confirmation_token,
 	}
 
 

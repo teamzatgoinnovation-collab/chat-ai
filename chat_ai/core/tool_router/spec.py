@@ -10,6 +10,16 @@ CATEGORY_READ = "read"
 CATEGORY_WRITE = "write"
 CATEGORY_ADMIN = "admin"
 
+# Low-risk writes: single safe creates — skip confirmation when risk_level is low
+LOW_RISK_TOOLS = frozenset(
+	{
+		"create_task",
+		"create_lead",
+		"create_issue",
+		"rename_document",
+	}
+)
+
 
 @dataclass
 class ToolSpec:
@@ -73,14 +83,34 @@ class ConfirmationPolicy:
 	def category_allowed(self, category: str) -> bool:
 		return (category or CATEGORY_READ).lower() in self.allowed_categories
 
-	def needs_confirmation(self, tool: ToolSpec, args: dict | None = None) -> bool:
+	def needs_confirmation(
+		self,
+		tool: ToolSpec,
+		args: dict | None = None,
+		*,
+		risk_level: str = "medium",
+	) -> bool:
 		args = args or {}
-		if tool.confirmation_required:
+		risk = (risk_level or "medium").lower()
+		name = (tool.name or "").lower()
+		action = str(args.get("action") or args.get("operation") or "").lower()
+
+		# High risk from planner always confirms
+		if risk == "high":
+			return True
+
+		# Bulk operations
+		if "bulk" in name:
+			return True
+		names = args.get("names") or args.get("documents") or []
+		if isinstance(names, list) and len(names) > 1:
+			return True
+
+		if tool.confirmation_required and name not in LOW_RISK_TOOLS:
 			return True
 		if tool.category == CATEGORY_ADMIN:
 			return True
-		name = (tool.name or "").lower()
-		action = str(args.get("action") or args.get("operation") or "").lower()
+
 		if self.confirm_delete and ("delete" in name or action == "delete"):
 			return True
 		if self.confirm_cancel and ("cancel" in name or action == "cancel"):
@@ -95,6 +125,13 @@ class ConfirmationPolicy:
 			x in name for x in ("invoice", "payment", "journal", "payroll")
 		):
 			return True
+
+		# Low risk: whitelisted single creates skip confirmation
+		if risk == "low" and name in LOW_RISK_TOOLS:
+			return False
+		if tool.category == CATEGORY_READ:
+			return False
+
 		if self.require_confirmation_for_writes and tool.category == CATEGORY_WRITE:
 			return True
 		return False

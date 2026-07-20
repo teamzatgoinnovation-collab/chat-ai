@@ -182,9 +182,11 @@
   },
   {
    "fieldname": "prompt_bundle_version",
-   "fieldtype": "Data",
+   "fieldtype": "Select",
    "label": "Prompt Bundle Version",
-   "default": "v1"
+   "options": "v1\nv2\nv3",
+   "default": "v3",
+   "description": "v3: concise ERP consultant behavior with intelligent defaults and plan approval"
   },
   {
    "fieldname": "limits_section",

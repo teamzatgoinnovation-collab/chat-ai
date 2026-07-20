@@ -29,6 +29,7 @@ const CAI_UI = {
 		livePrefix: "Hearing",
 		confirm: "Confirm",
 		cancel: "Cancel",
+		planOk: "OK — proceed",
 		voiceUnsupported: "Voice input is not supported in this browser. Use Chrome or Edge.",
 		voiceError: "Could not hear clearly — try again closer to the mic.",
 		voiceDenied: "Microphone permission denied. Allow mic access for this site.",
@@ -49,6 +50,7 @@ const CAI_UI = {
 		livePrefix: "يُسمع",
 		confirm: "تأكيد",
 		cancel: "إلغاء",
+		planOk: "موافق — متابعة",
 		voiceUnsupported: "الإدخال الصوتي غير مدعوم. استخدم Chrome أو Edge.",
 		voiceError: "لم يُسمع بوضوح — حاول مجدداً أقرب للميكروفون.",
 		voiceDenied: "تم رفض إذن الميكروفون. اسمح بالوصول لهذا الموقع.",
@@ -69,6 +71,7 @@ const CAI_UI = {
 		livePrefix: "കേൾക്കുന്നു",
 		confirm: "സ്ഥിരീകരിക്കുക",
 		cancel: "റദ്ദാക്കുക",
+		planOk: "ശരി — തുടരുക",
 		voiceUnsupported: "വോയ്സ് ലഭ്യമല്ല. Chrome അല്ലെങ്കിൽ Edge ഉപയോഗിക്കുക.",
 		voiceError: "വ്യക്തമായി കേട്ടില്ല — മൈക്കിനോട് അടുത്ത് വീണ്ടും ശ്രമിക്കുക.",
 		voiceDenied: "മൈക്ക് അനുമതി നിഷേധിച്ചു. ഈ സൈറ്റിന് അനുവദിക്കുക.",
@@ -323,8 +326,21 @@ chat_ai.sidebar.AppOptions = {
 				workspace: {},
 				language: this.language,
 			};
+			if (route[0] === "Workspaces" && route[1]) {
+				ctx.workspace = { name: route[1] };
+			} else if (route[0] === "List" && route[1]) {
+				ctx.workspace = { doctype: route[1] };
+			}
 			if (route[0] === "Form" && route[1] && route[2]) {
 				ctx.form = { doctype: route[1], name: route[2] };
+				const frm = window.cur_frm;
+				if (frm && frm.doc && frm.doc.doctype === route[1] && frm.doc.name === route[2]) {
+					ctx.form.docstatus = frm.doc.docstatus;
+					if (frm.doc.company) ctx.form.company = frm.doc.company;
+					if (frm.doc.customer) ctx.form.customer = frm.doc.customer;
+					if (frm.doc.project) ctx.form.project = frm.doc.project;
+					if (frm.doc.warehouse) ctx.form.warehouse = frm.doc.warehouse;
+				}
 			}
 			if (frappe.boot && frappe.boot.user && frappe.boot.user.recent) {
 				ctx.recent = frappe.boot.user.recent.slice(0, 10);
@@ -386,14 +402,36 @@ chat_ai.sidebar.AppOptions = {
 			});
 		},
 		pushMessage(role, payload) {
+			const cj = payload.content_json || {};
 			const msg = {
 				id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
 				role,
 				text: payload.text || "",
-				blocks: (payload.content_json && payload.content_json.blocks) || [],
-				needs_confirmation: !!(payload.content_json && payload.content_json.needs_confirmation),
+				blocks: cj.blocks || [],
+				needs_confirmation: !!cj.needs_confirmation,
+				needs_plan_approval: !!cj.needs_plan_approval,
+				pending_plan: cj.pending_plan || [],
+				pending_assumptions: cj.pending_assumptions || [],
+				confirmation_token: cj.confirmation_token || payload.confirmation_token || "",
 			};
 			this.messages.push(msg);
+			if (role === "assistant") {
+				if (msg.needs_confirmation) {
+					this.pending = {
+						kind: "tool",
+						tool: cj.pending_tool,
+						args: cj.pending_args,
+						token: msg.confirmation_token,
+					};
+				} else if (msg.needs_plan_approval) {
+					this.pending = {
+						kind: "plan",
+						plan: msg.pending_plan,
+						assumptions: msg.pending_assumptions,
+						token: msg.confirmation_token,
+					};
+				}
+			}
 			this.$nextTick(() => {
 				const box = this.$refs.messages;
 				if (box) box.scrollTop = box.scrollHeight;
@@ -412,13 +450,31 @@ chat_ai.sidebar.AppOptions = {
 				this.pushMessage("assistant", { text: "Cancelled." });
 				return;
 			}
-			if (!this.pending) return;
+			if (!this.pending || this.pending.kind !== "tool") return;
 			await this.sendRaw("", {
 				confirmed: 1,
 				pending_tool: this.pending.tool,
 				pending_args: this.pending.args,
+				confirmation_token: this.pending.token,
 			});
 			this.pending = null;
+		},
+		async confirmPlan(yes) {
+			if (!yes) {
+				this.pending = null;
+				this.pushMessage("assistant", { text: "Cancelled." });
+				return;
+			}
+			if (!this.pending || this.pending.kind !== "plan") return;
+			await this.sendRaw("OK", {
+				plan_confirmed: 1,
+				confirmation_token: this.pending.token,
+			});
+			this.pending = null;
+		},
+		isPlanApprovalText(text) {
+			const t = (text || "").trim().toLowerCase();
+			return ["ok", "yes", "confirm", "proceed", "continue", "go ahead", "y"].includes(t);
 		},
 		onKeydown(e) {
 			if (e.key === "Enter" && !e.shiftKey) {
@@ -630,6 +686,13 @@ chat_ai.sidebar.AppOptions = {
 			let text = (this.input || "").trim();
 			if (!text || this.busy) return;
 			this.stopListening();
+			// Typed OK for pending plan
+			if (this.pending && this.pending.kind === "plan" && this.isPlanApprovalText(text)) {
+				this.input = "";
+				this.pushMessage("user", { text });
+				await this.confirmPlan(true);
+				return;
+			}
 			let command = null;
 			if (text.startsWith("/")) {
 				const parts = text.slice(1).split(/\s+/);
@@ -661,6 +724,8 @@ chat_ai.sidebar.AppOptions = {
 						client_context: JSON.stringify(this.clientContext()),
 						command: extra.command || null,
 						confirmed: extra.confirmed || 0,
+						plan_confirmed: extra.plan_confirmed || 0,
+						confirmation_token: extra.confirmation_token || null,
 						pending_tool: extra.pending_tool || null,
 						pending_args: extra.pending_args
 							? JSON.stringify(extra.pending_args)
@@ -673,15 +738,20 @@ chat_ai.sidebar.AppOptions = {
 					return;
 				}
 				const data = payload.data || {};
-				if (data.needs_confirmation) {
-					this.pending = { tool: data.pending_tool, args: data.pending_args };
-				}
+				const cj = data.content_json || {
+					blocks: [],
+					needs_confirmation: data.needs_confirmation,
+					needs_plan_approval: data.needs_plan_approval,
+					pending_plan: data.pending_plan,
+					pending_assumptions: data.pending_assumptions,
+					pending_tool: data.pending_tool,
+					pending_args: data.pending_args,
+					confirmation_token: data.confirmation_token,
+				};
 				this.pushMessage("assistant", {
 					text: data.content || "",
-					content_json: data.content_json || {
-						blocks: [],
-						needs_confirmation: data.needs_confirmation,
-					},
+					content_json: cj,
+					confirmation_token: data.confirmation_token,
 				});
 			} catch (e) {
 				this.pushMessage("assistant", { text: e.message || "Request failed" });
@@ -780,7 +850,23 @@ chat_ai.sidebar.AppOptions = {
                 @click="openLink(l.doctype, l.name)"
               >{{ l.doctype }}: {{ l.name }}</button>
             </div>
+            <div v-if="b.type === 'plan' && b.data" class="cai-plan">
+              <p v-if="(b.data.assumptions || []).length" class="cai-plan-assumptions">
+                <strong>Assumptions</strong>
+              </p>
+              <ul v-if="(b.data.assumptions || []).length" class="cai-plan-list">
+                <li v-for="(a, ai) in b.data.assumptions" :key="'a'+ai">{{ a }}</li>
+              </ul>
+              <ol v-if="(b.data.steps || []).length" class="cai-plan-steps">
+                <li v-for="(s, si) in b.data.steps" :key="'s'+si">{{ s }}</li>
+              </ol>
+            </div>
           </template>
+
+          <div v-if="msg.needs_plan_approval" class="cai-confirm cai-confirm--plan">
+            <button type="button" class="cai-btn cai-btn--primary" @click="confirmPlan(true)">{{ ui.planOk }}</button>
+            <button type="button" class="cai-btn" @click="confirmPlan(false)">{{ ui.cancel }}</button>
+          </div>
 
           <div v-if="msg.needs_confirmation" class="cai-confirm">
             <button type="button" class="cai-btn cai-btn--primary" @click="confirmPending(true)">{{ ui.confirm }}</button>

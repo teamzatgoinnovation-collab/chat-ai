@@ -8,7 +8,7 @@ from typing import Any
 
 @dataclass
 class ContentBlock:
-	type: str  # markdown|table|links|chart|badge|status
+	type: str  # markdown|table|links|chart|badge|status|plan
 	data: Any = None
 
 
@@ -20,6 +20,10 @@ class AssistantResponse:
 	confirmation_message: str = ""
 	pending_tool: str = ""
 	pending_args: dict = field(default_factory=dict)
+	needs_plan_approval: bool = False
+	pending_plan: list = field(default_factory=list)
+	pending_assumptions: list = field(default_factory=list)
+	confirmation_token: str = ""
 
 	def to_content_json(self) -> dict:
 		return {
@@ -29,6 +33,10 @@ class AssistantResponse:
 			"confirmation_message": self.confirmation_message,
 			"pending_tool": self.pending_tool,
 			"pending_args": self.pending_args,
+			"needs_plan_approval": self.needs_plan_approval,
+			"pending_plan": self.pending_plan,
+			"pending_assumptions": self.pending_assumptions,
+			"confirmation_token": self.confirmation_token,
 		}
 
 
@@ -75,13 +83,42 @@ def clarification(question: str) -> AssistantResponse:
 	return AssistantResponse(markdown=question or "Could you provide more details?")
 
 
-def confirmation(message: str, tool: str, args: dict) -> AssistantResponse:
+def confirmation(message: str, tool: str, args: dict, *, token: str = "") -> AssistantResponse:
 	return AssistantResponse(
 		markdown=message,
 		needs_confirmation=True,
 		confirmation_message=message,
 		pending_tool=tool,
 		pending_args=args or {},
+		confirmation_token=token,
+	)
+
+
+def plan_approval(
+	message: str,
+	plan_steps: list[str],
+	assumptions: list[str] | None = None,
+	*,
+	token: str = "",
+) -> AssistantResponse:
+	steps = [str(s) for s in (plan_steps or []) if s]
+	assumptions = [str(a) for a in (assumptions or []) if a]
+	md_parts = [message or "Here is the plan:"]
+	if assumptions:
+		md_parts.append("**Assumptions:**\n" + "\n".join(f"- {a}" for a in assumptions))
+	if steps:
+		md_parts.append("**Plan:**\n" + "\n".join(f"{i + 1}. {s}" for i, s in enumerate(steps)))
+	md_parts.append("\nReply **OK** to continue or Cancel.")
+	blocks = []
+	if steps:
+		blocks.append(ContentBlock(type="plan", data={"steps": steps, "assumptions": assumptions}))
+	return AssistantResponse(
+		markdown="\n\n".join(md_parts),
+		needs_plan_approval=True,
+		pending_plan=steps,
+		pending_assumptions=assumptions,
+		confirmation_token=token,
+		blocks=blocks,
 	)
 
 

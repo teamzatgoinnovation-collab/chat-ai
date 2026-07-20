@@ -42,7 +42,14 @@ class ToolRouter:
 	def get(self, name: str) -> ToolSpec | None:
 		return self.tools.get(name)
 
-	def run(self, name: str, args: dict | None = None, *, confirmed: bool = False) -> ToolResult:
+	def run(
+		self,
+		name: str,
+		args: dict | None = None,
+		*,
+		confirmed: bool = False,
+		risk_level: str = "medium",
+	) -> ToolResult:
 		args = args or {}
 		tool = self.tools.get(name)
 		if not tool:
@@ -56,7 +63,7 @@ class ToolRouter:
 		if self._calls >= self.limits.max_tool_calls:
 			return ToolResult(ok=False, error="Max tool calls exceeded")
 
-		if self.policy.needs_confirmation(tool, args) and not confirmed:
+		if self.policy.needs_confirmation(tool, args, risk_level=risk_level) and not confirmed:
 			msg = _confirmation_message(tool, args)
 			return ToolResult(ok=False, needs_confirmation=True, confirmation_message=msg, data=args)
 

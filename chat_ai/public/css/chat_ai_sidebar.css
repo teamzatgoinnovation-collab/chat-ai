@@ -149,6 +149,33 @@
 	margin-top: 8px;
 }
 
+.cai-plan {
+	margin-top: 10px;
+	padding: 10px 12px;
+	border-radius: 10px;
+	background: var(--bg-light-gray, #f4f5f6);
+	font-size: 12px;
+}
+
+.cai-plan-assumptions {
+	margin: 0 0 6px;
+	font-size: 12px;
+}
+
+.cai-plan-list,
+.cai-plan-steps {
+	margin: 0 0 8px;
+	padding-left: 18px;
+}
+
+.cai-plan-steps li {
+	margin-bottom: 4px;
+}
+
+.cai-confirm--plan {
+	margin-top: 10px;
+}
+
 .cai-header .cai-mode {
 	max-width: 110px;
 }

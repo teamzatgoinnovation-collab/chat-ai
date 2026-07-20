@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import frappe
 
+from chat_ai.erpnext.context.defaults import resolve_intelligent_defaults
+
 
 def build_context_stack(client_context: dict | None = None, entities: dict | None = None) -> dict:
 	client_context = client_context or {}
@@ -17,6 +19,12 @@ def build_context_stack(client_context: dict | None = None, entities: dict | Non
 		"current_user": _current_user(),
 		"workspace_context": client_context.get("workspace") or {},
 	}
+	# Intelligent defaults (company, warehouse, etc.)
+	resolved = resolve_intelligent_defaults(stack)
+	if resolved.get("values"):
+		stack["intelligent_defaults"] = resolved["values"]
+	if resolved.get("assumptions"):
+		stack["assumptions"] = resolved["assumptions"]
 	# Drop empty layers
 	return {k: v for k, v in stack.items() if v}
 

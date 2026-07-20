@@ -108,6 +108,8 @@ def _ensure_settings():
 			doc.default_model = "gpt-4o"
 		if not getattr(doc, "default_language", None):
 			doc.default_language = "en"
+		if not getattr(doc, "prompt_bundle_version", None):
+			doc.prompt_bundle_version = "v3"
 		# Check fields migrate as 0; turn voice on once unless already bootstrapped
 		if not frappe.db.get_global("chat_ai_voice_bootstrapped"):
 			doc.enable_voice_input = 1

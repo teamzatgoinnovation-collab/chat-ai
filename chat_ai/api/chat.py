@@ -19,7 +19,17 @@ def _ensure_user():
 
 
 @frappe.whitelist()
-def send(session=None, message=None, client_context=None, command=None, confirmed=None, pending_tool=None, pending_args=None):
+def send(
+	session=None,
+	message=None,
+	client_context=None,
+	command=None,
+	confirmed=None,
+	pending_tool=None,
+	pending_args=None,
+	plan_confirmed=None,
+	confirmation_token=None,
+):
 	_ensure_user()
 	if isinstance(client_context, str):
 		client_context = json.loads(client_context or "{}")
@@ -37,6 +47,8 @@ def send(session=None, message=None, client_context=None, command=None, confirme
 			confirmed=frappe.utils.cint(confirmed),
 			pending_tool=pending_tool,
 			pending_args=pending_args or {},
+			plan_confirmed=frappe.utils.cint(plan_confirmed),
+			confirmation_token=confirmation_token,
 		)
 		return ok(data)
 	except Exception as exc:
