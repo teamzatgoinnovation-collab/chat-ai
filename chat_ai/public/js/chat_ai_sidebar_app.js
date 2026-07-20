@@ -16,19 +16,22 @@ const CAI_UI = {
 	en: {
 		sub: "ERP assistant",
 		emptyTitle: "Ask anything about your ERP",
-		emptyHint: "Try a question, type / for commands, or use the mic.",
+		emptyHint: "Click 🎤, speak in the selected language, click mic again to stop, then Send.",
 		placeholder: "Message or /command…",
 		send: "Send",
 		newChat: "New",
-		listening: "Listening…",
 		working: "Working…",
 		speak: "Speak",
 		stop: "Stop",
-		mic: "Voice input",
+		mic: "Voice input — click to talk, click again to stop",
 		micOff: "Enable Voice Input in Chat AI Settings",
+		listening: "Listening… speak clearly, then click mic to stop",
+		livePrefix: "Hearing",
 		confirm: "Confirm",
 		cancel: "Cancel",
-		voiceUnsupported: "Voice input is not supported in this browser.",
+		voiceUnsupported: "Voice input is not supported in this browser. Use Chrome or Edge.",
+		voiceError: "Could not hear clearly — try again closer to the mic.",
+		voiceDenied: "Microphone permission denied. Allow mic access for this site.",
 	},
 	ar: {
 		sub: "مساعد تخطيط الموارد",
@@ -37,15 +40,18 @@ const CAI_UI = {
 		placeholder: "رسالة أو /أمر…",
 		send: "إرسال",
 		newChat: "جديد",
-		listening: "جاري الاستماع…",
+		listening: "جاري الاستماع… تحدث بوضوح ثم اضغط الميكروفون للإيقاف",
 		working: "جاري العمل…",
 		speak: "تشغيل",
 		stop: "إيقاف",
-		mic: "إدخال صوتي",
+		mic: "إدخال صوتي — اضغط للتحدث ثم مجدداً للإيقاف",
 		micOff: "فعّل الإدخال الصوتي من إعدادات Chat AI",
+		livePrefix: "يُسمع",
 		confirm: "تأكيد",
 		cancel: "إلغاء",
-		voiceUnsupported: "الإدخال الصوتي غير مدعوم في هذا المتصفح.",
+		voiceUnsupported: "الإدخال الصوتي غير مدعوم. استخدم Chrome أو Edge.",
+		voiceError: "لم يُسمع بوضوح — حاول مجدداً أقرب للميكروفون.",
+		voiceDenied: "تم رفض إذن الميكروفون. اسمح بالوصول لهذا الموقع.",
 	},
 	ml: {
 		sub: "ERP സഹായി",
@@ -54,15 +60,18 @@ const CAI_UI = {
 		placeholder: "സന്ദേശം അല്ലെങ്കിൽ /കമാൻഡ്…",
 		send: "അയയ്ക്കുക",
 		newChat: "പുതിയത്",
-		listening: "കേൾക്കുന്നു…",
+		listening: "കേൾക്കുന്നു… വ്യക്തമായി സംസാരിച്ച് മൈക്ക് അമർത്തി നിർത്തുക",
 		working: "പ്രവർത്തിക്കുന്നു…",
 		speak: "കേൾക്കുക",
 		stop: "നിർത്തുക",
-		mic: "വോയ്സ് ഇൻപുട്ട്",
+		mic: "വോയ്സ് — ക്ലിക്ക് ചെയ്ത് സംസാരിക്കുക, വീണ്ടും അമർത്തി നിർത്തുക",
 		micOff: "Chat AI Settings-ൽ Voice Input ഓണാക്കുക",
+		livePrefix: "കേൾക്കുന്നു",
 		confirm: "സ്ഥിരീകരിക്കുക",
 		cancel: "റദ്ദാക്കുക",
-		voiceUnsupported: "ഈ ബ്രൗസറിൽ വോയ്സ് ഇൻപുട്ട് ലഭ്യമല്ല.",
+		voiceUnsupported: "വോയ്സ് ലഭ്യമല്ല. Chrome അല്ലെങ്കിൽ Edge ഉപയോഗിക്കുക.",
+		voiceError: "വ്യക്തമായി കേട്ടില്ല — മൈക്കിനോട് അടുത്ത് വീണ്ടും ശ്രമിക്കുക.",
+		voiceDenied: "മൈക്ക് അനുമതി നിഷേധിച്ചു. ഈ സൈറ്റിന് അനുവദിക്കുക.",
 	},
 };
 
@@ -122,6 +131,8 @@ chat_ai.sidebar.AppOptions = {
 			enableVoiceOut: true,
 			autoSpeak: false,
 			recognition: null,
+			liveTranscript: "",
+			voicesReady: false,
 		};
 	},
 	computed: {
@@ -135,6 +146,17 @@ chat_ai.sidebar.AppOptions = {
 		bcp47() {
 			const meta = this.languages.find((l) => l.code === this.language);
 			return (meta && meta.bcp47) || "en-US";
+		},
+		sttLang() {
+			/* Prefer browser locale for English; fixed locales for ar/ml. */
+			if (this.language === "en") {
+				const nav = (navigator.language || "").toLowerCase();
+				if (nav.startsWith("en")) return navigator.language;
+				return "en-US";
+			}
+			if (this.language === "ar") return "ar-SA";
+			if (this.language === "ml") return "ml-IN";
+			return this.bcp47;
 		},
 		paletteItems() {
 			if (!this.input.startsWith("/")) return [];
@@ -157,11 +179,18 @@ chat_ai.sidebar.AppOptions = {
 		input() {
 			this.paletteOpen = this.input.startsWith("/") && this.paletteItems.length > 0;
 		},
+		language() {
+			if (this.listening) {
+				this.stopListening();
+				this.$nextTick(() => this.startListening());
+			}
+		},
 	},
 	async mounted() {
 		chat_ai.sidebar._vm = this;
 		this.bindRealtime();
 		this.bindLayout();
+		this.warmVoices();
 		this.updateLayoutOffset();
 		await this.loadLocale();
 		this.loadCommands();
@@ -178,6 +207,35 @@ chat_ai.sidebar.AppOptions = {
 		},
 		formatText(s) {
 			return this.esc(s).replace(/\n/g, "<br>");
+		},
+		warmVoices() {
+			if (!window.speechSynthesis) return;
+			const mark = () => {
+				this.voicesReady = true;
+			};
+			window.speechSynthesis.getVoices();
+			window.speechSynthesis.onvoiceschanged = mark;
+			mark();
+		},
+		joinVoiceParts(...parts) {
+			return parts
+				.map((p) => (p || "").trim())
+				.filter(Boolean)
+				.join(" ")
+				.replace(/\s+/g, " ")
+				.trim();
+		},
+		pickBestAlternative(result) {
+			let best = result[0];
+			let bestScore = typeof best.confidence === "number" ? best.confidence : 0;
+			for (let i = 1; i < result.length; i++) {
+				const c = typeof result[i].confidence === "number" ? result[i].confidence : 0;
+				if (c > bestScore) {
+					best = result[i];
+					bestScore = c;
+				}
+			}
+			return { transcript: (best.transcript || "").trim(), confidence: bestScore };
 		},
 		/** Keep panel below navbar + form page-head so Save/Submit stay clickable. */
 		updateLayoutOffset() {
@@ -369,6 +427,10 @@ chat_ai.sidebar.AppOptions = {
 			}
 		},
 		toggleMic() {
+			if (!this.enableVoiceIn) {
+				frappe.show_alert({ message: this.ui.micOff, indicator: "orange" });
+				return;
+			}
 			if (this.listening) this.stopListening();
 			else this.startListening();
 		},
@@ -380,63 +442,188 @@ chat_ai.sidebar.AppOptions = {
 				return;
 			}
 			this.stopSpeaking();
-			const rec = new SR();
-			rec.lang = this.bcp47;
-			rec.interimResults = true;
-			rec.continuous = false;
-			rec.onresult = (ev) => {
-				let finalText = "";
-				let interim = "";
-				for (let i = ev.resultIndex; i < ev.results.length; i++) {
-					const t = ev.results[i][0].transcript;
-					if (ev.results[i].isFinal) finalText += t;
-					else interim += t;
-				}
-				if (finalText) {
-					this.input = ((this.input || "") + " " + finalText).trim();
-				} else if (interim) {
-					this.progress = interim;
-				}
-			};
-			rec.onerror = () => {
-				this.listening = false;
-				this.progress = "";
-			};
-			rec.onend = () => {
-				this.listening = false;
-				if (this.progress && this.progress !== this.ui.listening) this.progress = "";
-			};
-			this.recognition = rec;
+			this._keepListening = true;
+			this._voiceBase = (this.input || "").trim();
+			this._voiceFinal = "";
+			this.liveTranscript = "";
 			this.listening = true;
 			this.progress = this.ui.listening;
-			rec.start();
+			this._bindRecognition(SR);
+		},
+		_bindRecognition(SR) {
+			if (!this._keepListening) return;
+			try {
+				if (this.recognition) {
+					this.recognition.onend = null;
+					this.recognition.onerror = null;
+					this.recognition.onresult = null;
+					this.recognition.stop();
+				}
+			} catch (e) {
+				/* ignore */
+			}
+			const rec = new SR();
+			rec.lang = this.sttLang;
+			rec.continuous = true;
+			rec.interimResults = true;
+			rec.maxAlternatives = 3;
+			rec.onresult = (ev) => {
+				let interim = "";
+				for (let i = ev.resultIndex; i < ev.results.length; i++) {
+					const picked = this.pickBestAlternative(ev.results[i]);
+					if (!picked.transcript) continue;
+					if (ev.results[i].isFinal) {
+						if (picked.confidence > 0 && picked.confidence < 0.35) continue;
+						this._voiceFinal = this.joinVoiceParts(this._voiceFinal, picked.transcript);
+					} else {
+						interim = this.joinVoiceParts(interim, picked.transcript);
+					}
+				}
+				this.input = this.joinVoiceParts(this._voiceBase, this._voiceFinal, interim);
+				this.liveTranscript = interim;
+				this.progress = interim
+					? `${this.ui.livePrefix}: ${interim}`
+					: this.ui.listening;
+			};
+			rec.onerror = (ev) => {
+				const err = (ev && ev.error) || "";
+				if (err === "not-allowed" || err === "service-not-allowed") {
+					this._keepListening = false;
+					frappe.show_alert({ message: this.ui.voiceDenied, indicator: "red" });
+					this.listening = false;
+					this.progress = "";
+					this.liveTranscript = "";
+					return;
+				}
+				if (err === "no-speech" || err === "aborted") {
+					return;
+				}
+				if (err === "audio-capture" || err === "network") {
+					this._keepListening = false;
+					frappe.show_alert({ message: this.ui.voiceError, indicator: "orange" });
+					this.listening = false;
+					this.progress = "";
+					this.liveTranscript = "";
+				}
+			};
+			rec.onend = () => {
+				this.recognition = null;
+				if (!this._keepListening) {
+					this.listening = false;
+					this.liveTranscript = "";
+					if (
+						this.progress === this.ui.listening ||
+						(this.progress || "").startsWith(this.ui.livePrefix)
+					) {
+						this.progress = "";
+					}
+					return;
+				}
+				clearTimeout(this._restartTimer);
+				this._restartTimer = setTimeout(() => {
+					if (this._keepListening) this._bindRecognition(SR);
+				}, 180);
+			};
+			this.recognition = rec;
+			try {
+				rec.start();
+			} catch (e) {
+				clearTimeout(this._restartTimer);
+				this._restartTimer = setTimeout(() => {
+					if (this._keepListening) this._bindRecognition(SR);
+				}, 250);
+			}
 		},
 		stopListening() {
+			this._keepListening = false;
+			clearTimeout(this._restartTimer);
 			try {
-				if (this.recognition) this.recognition.stop();
+				if (this.recognition) {
+					this.recognition.onend = null;
+					this.recognition.stop();
+				}
 			} catch (e) {
 				/* ignore */
 			}
 			this.recognition = null;
 			this.listening = false;
-			if (this.progress === this.ui.listening) this.progress = "";
+			this.liveTranscript = "";
+			this.input = this.joinVoiceParts(this._voiceBase, this._voiceFinal);
+			this._voiceBase = this.input;
+			this._voiceFinal = "";
+			if (
+				this.progress === this.ui.listening ||
+				(this.progress || "").startsWith(this.ui.livePrefix)
+			) {
+				this.progress = "";
+			}
+		},
+		pickTtsVoice(lang) {
+			const voices = window.speechSynthesis.getVoices() || [];
+			if (!voices.length) return null;
+			const code = (lang || "en-US").toLowerCase();
+			const prefix = code.split("-")[0];
+			const score = (v) => {
+				const vl = (v.lang || "").toLowerCase();
+				let s = 0;
+				if (vl === code) s += 40;
+				else if (vl.startsWith(prefix + "-") || vl === prefix) s += 25;
+				else if (vl.startsWith(prefix)) s += 10;
+				else return -1;
+				if (v.localService) s += 8;
+				if (/neural|premium|enhanced|natural/i.test(v.name || "")) s += 5;
+				return s;
+			};
+			let best = null;
+			let bestScore = -1;
+			for (const v of voices) {
+				const s = score(v);
+				if (s > bestScore) {
+					best = v;
+					bestScore = s;
+				}
+			}
+			return best;
+		},
+		cleanForSpeech(text) {
+			return String(text || "")
+				.replace(/```[\s\S]*?```/g, " ")
+				.replace(/`[^`]+`/g, " ")
+				.replace(/[#*_>~]/g, " ")
+				.replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+				.replace(/https?:\/\/\S+/g, " ")
+				.replace(/\s+/g, " ")
+				.trim();
 		},
 		speak(msg) {
 			if (!this.enableVoiceOut || !this.ttsAvailable || !msg || !msg.text) return;
 			this.stopSpeaking();
-			const u = new SpeechSynthesisUtterance(msg.text.replace(/[#*_`]/g, " "));
+			const plain = this.cleanForSpeech(msg.text);
+			if (!plain) return;
+			const u = new SpeechSynthesisUtterance(plain);
 			u.lang = this.bcp47;
-			const voices = window.speechSynthesis.getVoices() || [];
-			const match = voices.find((v) => v.lang && v.lang.toLowerCase().startsWith(this.language));
-			if (match) u.voice = match;
+			const match = this.pickTtsVoice(this.bcp47);
+			if (match) {
+				u.voice = match;
+				u.lang = match.lang || this.bcp47;
+			}
+			u.rate = this.language === "ar" || this.language === "ml" ? 0.9 : 1;
+			u.pitch = 1;
 			u.onend = () => {
+				if (this.speakingId === msg.id) this.speakingId = null;
+			};
+			u.onerror = () => {
 				if (this.speakingId === msg.id) this.speakingId = null;
 			};
 			this.speakingId = msg.id;
 			window.speechSynthesis.speak(u);
 		},
 		stopSpeaking() {
-			if (this.ttsAvailable) window.speechSynthesis.cancel();
+			try {
+				if (window.speechSynthesis) window.speechSynthesis.cancel();
+			} catch (e) {
+				/* ignore */
+			}
 			this.speakingId = null;
 		},
 		async send() {
@@ -611,12 +798,15 @@ chat_ai.sidebar.AppOptions = {
       </div>
     </div>
 
-    <div class="cai-progress" :class="{ 'cai-progress--active': progress || busy || listening }">
+    <div
+      class="cai-progress"
+      :class="{ 'cai-progress--active': progress || busy || listening, 'cai-progress--listening': listening }"
+    >
       <span v-if="progress || busy || listening" class="cai-progress-dot"></span>
-      {{ progress || (busy ? ui.working : '') }}
+      <span class="cai-progress-text">{{ progress || (busy ? ui.working : '') }}</span>
     </div>
 
-    <footer class="cai-composer">
+    <footer class="cai-composer" :class="{ 'cai-composer--listening': listening }">
       <div v-show="paletteOpen" class="cai-palette">
         <button
           v-for="c in paletteItems"

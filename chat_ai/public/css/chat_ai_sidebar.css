@@ -97,6 +97,26 @@
 	align-self: end;
 }
 
+.cai-progress--listening {
+	color: #c0392b;
+	font-weight: 500;
+}
+
+.cai-progress--listening .cai-progress-dot {
+	background: #c0392b;
+}
+
+.cai-progress-text {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.cai-composer--listening .cai-input {
+	border-color: #c0392b;
+	box-shadow: 0 0 0 2px rgba(192, 57, 43, 0.15);
+}
+
 .cai-mic {
 	min-width: 36px;
 	min-height: 36px;
@@ -108,10 +128,21 @@
 	background: #c0392b !important;
 	border-color: #c0392b !important;
 	color: #fff !important;
+	animation: cai-mic-pulse 1.2s ease-in-out infinite;
 }
 
 .cai-mic--off {
 	opacity: 0.45;
+}
+
+@keyframes cai-mic-pulse {
+	0%,
+	100% {
+		box-shadow: 0 0 0 0 rgba(192, 57, 43, 0.45);
+	}
+	50% {
+		box-shadow: 0 0 0 8px rgba(192, 57, 43, 0);
+	}
 }
 
 .cai-voice-actions {
