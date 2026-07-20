@@ -29,15 +29,39 @@ def get_capabilities(label: str) -> Capabilities:
 	return PROVIDER_DEFAULTS.get(label, PROVIDER_DEFAULTS["Custom OpenAI-compatible"])
 
 
+_DEFAULT_MODELS = {
+	"OpenAI": "gpt-4o",
+	"Anthropic": "claude-sonnet-4-20250514",
+	"Google Gemini": "gemini-2.0-flash",
+	"Azure OpenAI": "gpt-4o",
+	"Ollama": "llama3.2",
+	"OpenRouter": "openai/gpt-4o-mini",
+	"Custom OpenAI-compatible": "gpt-4o",
+}
+
+_DEFAULT_EMBEDDING_MODELS = {
+	"OpenAI": "text-embedding-3-small",
+	"Google Gemini": "text-embedding-004",
+	"Ollama": "nomic-embed-text",
+	"OpenRouter": "openai/text-embedding-3-small",
+	"Custom OpenAI-compatible": "text-embedding-3-small",
+}
+
+
 def from_settings(settings: dict[str, Any], *, for_embedding: bool = False) -> LLMProvider:
 	"""Build provider from a plain settings dict."""
 	if for_embedding:
 		label = settings.get("embedding_provider") or settings.get("provider") or "OpenAI"
-		model = settings.get("embedding_model") or settings.get("default_model") or "text-embedding-3-small"
+		model = (
+			settings.get("embedding_model")
+			or settings.get("default_model")
+			or _DEFAULT_EMBEDDING_MODELS.get(label)
+			or "text-embedding-3-small"
+		)
 		api_key = settings.get("embedding_api_key") or settings.get("api_key") or ""
 	else:
 		label = settings.get("provider") or "OpenAI"
-		model = settings.get("default_model") or "gpt-4o"
+		model = settings.get("default_model") or _DEFAULT_MODELS.get(label) or "gpt-4o"
 		api_key = settings.get("api_key") or ""
 
 	endpoint = settings.get("api_endpoint") or _default_endpoint(label)
