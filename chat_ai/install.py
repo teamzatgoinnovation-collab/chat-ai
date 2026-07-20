@@ -108,10 +108,11 @@ def _ensure_settings():
 			doc.default_model = "gpt-4o"
 		if not getattr(doc, "default_language", None):
 			doc.default_language = "en"
-		if getattr(doc, "enable_voice_input", None) is None:
+		# Check fields migrate as 0; turn voice on once unless already bootstrapped
+		if not frappe.db.get_global("chat_ai_voice_bootstrapped"):
 			doc.enable_voice_input = 1
-		if getattr(doc, "enable_voice_output", None) is None:
 			doc.enable_voice_output = 1
+			frappe.db.set_global("chat_ai_voice_bootstrapped", "1")
 		doc.save(ignore_permissions=True)
 	except Exception:
 		frappe.log_error(title="chat_ai ensure settings")

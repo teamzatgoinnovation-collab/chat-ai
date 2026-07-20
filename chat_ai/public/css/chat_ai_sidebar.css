@@ -97,10 +97,21 @@
 	align-self: end;
 }
 
+.cai-mic {
+	min-width: 36px;
+	min-height: 36px;
+	font-size: 16px;
+	line-height: 1;
+}
+
 .cai-mic--on {
 	background: #c0392b !important;
 	border-color: #c0392b !important;
 	color: #fff !important;
+}
+
+.cai-mic--off {
+	opacity: 0.45;
 }
 
 .cai-voice-actions {

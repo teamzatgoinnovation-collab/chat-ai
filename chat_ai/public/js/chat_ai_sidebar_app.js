@@ -25,6 +25,7 @@ const CAI_UI = {
 		speak: "Speak",
 		stop: "Stop",
 		mic: "Voice input",
+		micOff: "Enable Voice Input in Chat AI Settings",
 		confirm: "Confirm",
 		cancel: "Cancel",
 		voiceUnsupported: "Voice input is not supported in this browser.",
@@ -41,6 +42,7 @@ const CAI_UI = {
 		speak: "تشغيل",
 		stop: "إيقاف",
 		mic: "إدخال صوتي",
+		micOff: "فعّل الإدخال الصوتي من إعدادات Chat AI",
 		confirm: "تأكيد",
 		cancel: "إلغاء",
 		voiceUnsupported: "الإدخال الصوتي غير مدعوم في هذا المتصفح.",
@@ -57,6 +59,7 @@ const CAI_UI = {
 		speak: "കേൾക്കുക",
 		stop: "നിർത്തുക",
 		mic: "വോയ്സ് ഇൻപുട്ട്",
+		micOff: "Chat AI Settings-ൽ Voice Input ഓണാക്കുക",
 		confirm: "സ്ഥിരീകരിക്കുക",
 		cancel: "റദ്ദാക്കുക",
 		voiceUnsupported: "ഈ ബ്രൗസറിൽ വോയ്സ് ഇൻപുട്ട് ലഭ്യമല്ല.",
@@ -636,13 +639,14 @@ chat_ai.sidebar.AppOptions = {
       ></textarea>
       <div class="cai-composer-actions">
         <button
-          v-if="enableVoiceIn && voiceAvailable"
+          v-if="voiceAvailable"
           type="button"
           class="cai-icon-btn cai-mic"
-          :class="{ 'cai-mic--on': listening }"
-          :title="ui.mic"
+          :class="{ 'cai-mic--on': listening, 'cai-mic--off': !enableVoiceIn }"
+          :disabled="!enableVoiceIn || busy"
+          :title="enableVoiceIn ? ui.mic : ui.micOff"
           @click="toggleMic"
-        >{{ listening ? '■' : '🎙' }}</button>
+        >{{ listening ? '■' : '🎤' }}</button>
         <button
           type="button"
           class="cai-btn cai-btn--primary cai-send"
