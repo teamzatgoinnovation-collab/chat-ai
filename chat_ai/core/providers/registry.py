@@ -35,7 +35,7 @@ _DEFAULT_MODELS = {
 	"Google Gemini": "gemini-2.0-flash",
 	"Azure OpenAI": "gpt-4o",
 	"Ollama": "llama3.2",
-	"OpenRouter": "openai/gpt-4o-mini",
+	"OpenRouter": "openrouter/auto",
 	"Custom OpenAI-compatible": "gpt-4o",
 }
 
@@ -52,19 +52,26 @@ def from_settings(settings: dict[str, Any], *, for_embedding: bool = False) -> L
 	"""Build provider from a plain settings dict."""
 	if for_embedding:
 		label = settings.get("embedding_provider") or settings.get("provider") or "OpenAI"
+		api_key = settings.get("embedding_api_key") or settings.get("api_key") or ""
+		label = _normalize_provider_label(label, api_key)
 		model = (
 			settings.get("embedding_model")
 			or settings.get("default_model")
 			or _DEFAULT_EMBEDDING_MODELS.get(label)
 			or "text-embedding-3-small"
 		)
-		api_key = settings.get("embedding_api_key") or settings.get("api_key") or ""
 	else:
 		label = settings.get("provider") or "OpenAI"
-		model = settings.get("default_model") or _DEFAULT_MODELS.get(label) or "gpt-4o"
 		api_key = settings.get("api_key") or ""
+		label = _normalize_provider_label(label, api_key)
+		model = settings.get("default_model") or _DEFAULT_MODELS.get(label) or "gpt-4o"
 
-	endpoint = settings.get("api_endpoint") or _default_endpoint(label)
+	endpoint = (settings.get("api_endpoint") or "").strip() or _default_endpoint(label)
+	if not endpoint:
+		raise RuntimeError(
+			f"API Endpoint is required for provider '{label}'. "
+			"For OpenRouter set Provider to OpenRouter (or endpoint https://openrouter.ai/api/v1)."
+		)
 	timeout = int(settings.get("request_timeout_seconds") or 120)
 
 	if label in _REGISTRY:
@@ -85,6 +92,14 @@ def from_settings(settings: dict[str, Any], *, for_embedding: bool = False) -> L
 	)
 
 
+def _normalize_provider_label(label: str, api_key: str) -> str:
+	"""Map OpenRouter keys away from Custom→localhost default."""
+	key = (api_key or "").strip()
+	if key.startswith("sk-or-") and label in ("Custom OpenAI-compatible", "OpenAI", ""):
+		return "OpenRouter"
+	return label
+
+
 def _default_endpoint(label: str) -> str:
 	return {
 		"OpenAI": "https://api.openai.com/v1",
@@ -93,7 +108,8 @@ def _default_endpoint(label: str) -> str:
 		"Azure OpenAI": "",
 		"Ollama": "http://127.0.0.1:11434/v1",
 		"OpenRouter": "https://openrouter.ai/api/v1",
-		"Custom OpenAI-compatible": "http://127.0.0.1:8080/v1",
+		# Empty on purpose — require an explicit URL (avoids silent localhost 111)
+		"Custom OpenAI-compatible": "",
 	}.get(label, "https://api.openai.com/v1")
 
 
