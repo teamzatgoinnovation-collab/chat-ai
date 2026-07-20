@@ -221,8 +221,14 @@ chat_ai.sidebar.AppOptions = {
 		},
 		async loadLocale() {
 			try {
-				const r = await frappe.call("chat_ai.api.chat.get_ui_locale");
-				if (!(r.message && r.message.ok)) return;
+				const r = await frappe.call({
+					method: "chat_ai.api.chat.get_ui_locale",
+					freeze: false,
+					error: () => {
+						/* keep defaults if method not yet loaded on worker */
+					},
+				});
+				if (!(r && r.message && r.message.ok)) return;
 				const d = r.message.data || {};
 				if (d.languages && d.languages.length) this.languages = d.languages;
 				if (d.language) this.language = d.language;
