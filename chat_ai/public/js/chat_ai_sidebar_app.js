@@ -3,15 +3,6 @@
  */
 frappe.provide("chat_ai.sidebar");
 
-const CAI_MODES = [
-	"Normal Chat",
-	"ERP Assistant",
-	"Document Assistant",
-	"Analytics Assistant",
-	"Developer Assistant",
-	"Admin Assistant",
-];
-
 const CAI_UI = {
 	en: {
 		sub: "ERP assistant",
@@ -45,6 +36,7 @@ const CAI_UI = {
 		copy: "Copy",
 		copied: "Copied",
 		artifact: "Result",
+		modeAuto: "Auto",
 	},
 	ar: {
 		sub: "مساعد تخطيط الموارد",
@@ -78,6 +70,7 @@ const CAI_UI = {
 		copy: "نسخ",
 		copied: "تم النسخ",
 		artifact: "نتيجة",
+		modeAuto: "تلقائي",
 	},
 	ml: {
 		sub: "ERP സഹായി",
@@ -111,6 +104,7 @@ const CAI_UI = {
 		copy: "പകർത്തുക",
 		copied: "പകർത്തി",
 		artifact: "ഫലം",
+		modeAuto: "ഓട്ടോ",
 	},
 };
 
@@ -150,7 +144,6 @@ chat_ai.sidebar.AppOptions = {
 			open: localStorage.getItem("chat_ai_open") === "1",
 			session: null,
 			mode: "ERP Assistant",
-			modes: CAI_MODES,
 			language: savedLang,
 			languages: [
 				{ code: "en", label: "English", native: "English", bcp47: "en-US", dir: "ltr" },
@@ -432,7 +425,6 @@ chat_ai.sidebar.AppOptions = {
 		async newSession() {
 			const r = await frappe.call("chat_ai.api.chat.new_session", {
 				language: this.language,
-				assistant_mode: this.mode,
 			});
 			if (r.message && r.message.ok) {
 				this.session = r.message.data.name;
@@ -540,14 +532,6 @@ chat_ai.sidebar.AppOptions = {
 			this.busy = false;
 			this.progress = "";
 			this.streamMsgId = null;
-		},
-		async setMode(mode) {
-			this.mode = mode;
-			if (!this.session) return;
-			await frappe.call("chat_ai.api.chat.set_mode", {
-				session: this.session,
-				assistant_mode: mode,
-			});
 		},
 		async setLanguage(code) {
 			this.language = code;
@@ -923,6 +907,7 @@ chat_ai.sidebar.AppOptions = {
 					return;
 				}
 				const data = payload.data || {};
+				if (data.assistant_mode) this.mode = data.assistant_mode;
 				const cj = data.content_json || {
 					blocks: [],
 					needs_confirmation: data.needs_confirmation,
@@ -1035,14 +1020,11 @@ chat_ai.sidebar.AppOptions = {
         <span class="cai-brand-mark">AI</span>
         <div class="cai-brand-text">
           <strong>Chat AI</strong>
-          <span class="cai-brand-sub">{{ ui.sub }}</span>
+          <span class="cai-brand-sub">{{ ui.sub }} · {{ mode || ui.modeAuto }}</span>
         </div>
       </div>
       <select class="cai-mode" :value="language" @change="setLanguage($event.target.value)" title="Language">
         <option v-for="l in languages" :key="l.code" :value="l.code">{{ l.native }}</option>
-      </select>
-      <select class="cai-mode" :value="mode" @change="setMode($event.target.value)" title="Assistant mode">
-        <option v-for="m in modes" :key="m" :value="m">{{ m }}</option>
       </select>
       <button type="button" class="cai-icon-btn" :title="ui.sessions" @click="showSessions = !showSessions; refreshSessions()">☰</button>
       <button type="button" class="cai-icon-btn" :title="ui.newChat" @click="newSession">{{ ui.newChat }}</button>

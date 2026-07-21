@@ -152,6 +152,38 @@ class TestRestToolSpec(unittest.TestCase):
 		self.assertEqual(openai["function"]["name"], "get_weather")
 
 
+class TestAssistantModeResolve(unittest.TestCase):
+	def test_form_context_document(self):
+		from chat_ai.core.assistant_mode import MODE_DOCUMENT, resolve_assistant_mode
+
+		mode = resolve_assistant_mode(
+			{"route": {"path": ["Form", "Task", "TASK-1"]}, "form": {"doctype": "Task", "name": "TASK-1"}},
+			"update status",
+		)
+		self.assertEqual(mode, MODE_DOCUMENT)
+
+	def test_analytics_keywords(self):
+		from chat_ai.core.assistant_mode import MODE_ANALYTICS, resolve_assistant_mode
+
+		self.assertEqual(resolve_assistant_mode({}, "Show sales report summary"), MODE_ANALYTICS)
+
+	def test_developer_keywords(self):
+		from chat_ai.core.assistant_mode import MODE_DEVELOPER, resolve_assistant_mode
+
+		self.assertEqual(resolve_assistant_mode({}, "Explain the whitelist API for this DocType"), MODE_DEVELOPER)
+
+	def test_admin_keywords(self):
+		from chat_ai.core.assistant_mode import MODE_ADMIN, resolve_assistant_mode
+
+		self.assertEqual(resolve_assistant_mode({}, "Change role permissions for Sales User"), MODE_ADMIN)
+
+	def test_default_erp(self):
+		from chat_ai.core.assistant_mode import MODE_ERP, normalize_mode, resolve_assistant_mode
+
+		self.assertEqual(resolve_assistant_mode({}, "Create a task for tomorrow"), MODE_ERP)
+		self.assertEqual(normalize_mode("Normal Chat"), MODE_ERP)
+
+
 
 class TestPlanApprovalResponse(unittest.TestCase):
 	def test_plan_approval_shape(self):

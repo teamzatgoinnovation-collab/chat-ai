@@ -27,6 +27,7 @@ from chat_ai.core.tool_router.spec import ConfirmationPolicy, ToolSpec
 from chat_ai.erpnext.confirmation_tokens import consume_token, issue_token
 from chat_ai.core.approval import is_plan_approval_text
 from chat_ai.erpnext.context import build_context_stack
+from chat_ai.core.assistant_mode import resolve_assistant_mode
 from chat_ai.core.tool_enrichment import enrich_tool_args
 from chat_ai.erpnext.events.realtime_events import publish_progress, publish_stream
 from chat_ai.erpnext.settings import get_settings_dict
@@ -164,7 +165,14 @@ def run_turn(
 
 	from chat_ai.core.i18n import normalize_language
 
-	settings["_assistant_mode"] = session.assistant_mode
+	resolved_mode = resolve_assistant_mode(
+		client_context,
+		user_message,
+		getattr(session, "assistant_mode", None),
+	)
+	settings["_assistant_mode"] = resolved_mode
+	if session.assistant_mode != resolved_mode:
+		session.assistant_mode = resolved_mode
 	settings["_language"] = normalize_language(
 		getattr(session, "language", None) or settings.get("default_language") or "en"
 	)
@@ -549,6 +557,7 @@ def _persist(session, memory, user_message, resp: AssistantResponse, settings, t
 		"message": assistant.name,
 		"content": resp.markdown,
 		"content_json": resp.to_content_json(),
+		"assistant_mode": settings.get("_assistant_mode") or session.assistant_mode or "ERP Assistant",
 		"needs_confirmation": resp.needs_confirmation,
 		"confirmation_message": resp.confirmation_message,
 		"pending_tool": resp.pending_tool,
