@@ -33,6 +33,18 @@ const CAI_UI = {
 		voiceUnsupported: "Voice input is not supported in this browser. Use Chrome or Edge.",
 		voiceError: "Could not hear clearly — try again closer to the mic.",
 		voiceDenied: "Microphone permission denied. Allow mic access for this site.",
+		sessions: "Chats",
+		rename: "Rename",
+		pin: "Pin",
+		unpin: "Unpin",
+		archive: "Archive",
+		delete: "Delete",
+		clear: "Clear",
+		stopGen: "Stop",
+		searchSessions: "Search chats…",
+		copy: "Copy",
+		copied: "Copied",
+		artifact: "Result",
 	},
 	ar: {
 		sub: "مساعد تخطيط الموارد",
@@ -54,6 +66,18 @@ const CAI_UI = {
 		voiceUnsupported: "الإدخال الصوتي غير مدعوم. استخدم Chrome أو Edge.",
 		voiceError: "لم يُسمع بوضوح — حاول مجدداً أقرب للميكروفون.",
 		voiceDenied: "تم رفض إذن الميكروفون. اسمح بالوصول لهذا الموقع.",
+		sessions: "المحادثات",
+		rename: "إعادة تسمية",
+		pin: "تثبيت",
+		unpin: "إلغاء التثبيت",
+		archive: "أرشفة",
+		delete: "حذف",
+		clear: "مسح",
+		stopGen: "إيقاف",
+		searchSessions: "بحث…",
+		copy: "نسخ",
+		copied: "تم النسخ",
+		artifact: "نتيجة",
 	},
 	ml: {
 		sub: "ERP സഹായി",
@@ -75,6 +99,18 @@ const CAI_UI = {
 		voiceUnsupported: "വോയ്സ് ലഭ്യമല്ല. Chrome അല്ലെങ്കിൽ Edge ഉപയോഗിക്കുക.",
 		voiceError: "വ്യക്തമായി കേട്ടില്ല — മൈക്കിനോട് അടുത്ത് വീണ്ടും ശ്രമിക്കുക.",
 		voiceDenied: "മൈക്ക് അനുമതി നിഷേധിച്ചു. ഈ സൈറ്റിന് അനുവദിക്കുക.",
+		sessions: "ചാറ്റുകൾ",
+		rename: "പേര് മാറ്റുക",
+		pin: "പിൻ",
+		unpin: "അൺപിൻ",
+		archive: "ആർക്കൈവ്",
+		delete: "ഇല്ലാതാക്കുക",
+		clear: "മായ്ക്കുക",
+		stopGen: "നിർത്തുക",
+		searchSessions: "തിരയുക…",
+		copy: "പകർത്തുക",
+		copied: "പകർത്തി",
+		artifact: "ഫലം",
 	},
 };
 
@@ -136,6 +172,12 @@ chat_ai.sidebar.AppOptions = {
 			recognition: null,
 			liveTranscript: "",
 			voicesReady: false,
+			sessions: [],
+			sessionQuery: "",
+			showSessions: false,
+			streamMsgId: null,
+			streamStopped: false,
+			sessionPinned: false,
 		};
 	},
 	computed: {
@@ -197,7 +239,11 @@ chat_ai.sidebar.AppOptions = {
 		this.updateLayoutOffset();
 		await this.loadLocale();
 		this.loadCommands();
-		if (this.open && !this.session) this.newSession();
+		await this.refreshSessions();
+		if (this.open && !this.session) {
+			if (this.sessions.length) await this.openSession(this.sessions[0].name);
+			else await this.newSession();
+		}
 	},
 	beforeUnmount() {
 		this.unbindLayout();
@@ -209,7 +255,35 @@ chat_ai.sidebar.AppOptions = {
 			return frappe.utils.escape_html(String(s ?? ""));
 		},
 		formatText(s) {
-			return this.esc(s).replace(/\n/g, "<br>");
+			let t = this.esc(s);
+			const codes = [];
+			t = t.replace(/```([\s\S]*?)```/g, (_, code) => {
+				const i = codes.length;
+				codes.push(`<pre class="cai-code"><code>${code.trim()}</code></pre>`);
+				return `@@CODE${i}@@`;
+			});
+			t = t.replace(/`([^`]+)`/g, "<code class=\"cai-inline-code\">$1</code>");
+			t = t.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+			t = t.replace(/(^|\n)[\-*] (.+)/g, "$1• $2");
+			t = t.replace(/\n/g, "<br>");
+			codes.forEach((html, i) => {
+				t = t.replace(`@@CODE${i}@@`, html);
+			});
+			return t;
+		},
+		copyText(text) {
+			const t = String(text || "");
+			if (!t) return;
+			const done = () => frappe.show_alert({ message: this.ui.copied, indicator: "green" });
+			if (navigator.clipboard && navigator.clipboard.writeText) {
+				navigator.clipboard.writeText(t).then(done).catch(() => {
+					frappe.utils.copy_to_clipboard(t);
+					done();
+				});
+			} else {
+				frappe.utils.copy_to_clipboard(t);
+				done();
+			}
 		},
 		warmVoices() {
 			if (!window.speechSynthesis) return;
@@ -365,8 +439,107 @@ chat_ai.sidebar.AppOptions = {
 				this.messages = [];
 				this.progress = "";
 				this.pending = null;
+				this.sessionPinned = false;
+				this.streamMsgId = null;
+				this.streamStopped = false;
 				this.stopSpeaking();
+				await this.refreshSessions();
 			}
+		},
+		async refreshSessions() {
+			try {
+				const method = this.sessionQuery
+					? "chat_ai.api.chat.search_sessions"
+					: "chat_ai.api.chat.list_sessions";
+				const args = this.sessionQuery ? { query: this.sessionQuery } : { status: "Active" };
+				const r = await frappe.call(method, args);
+				if (r.message && r.message.ok) this.sessions = r.message.data || [];
+			} catch (e) {
+				this.sessions = [];
+			}
+		},
+		async openSession(name) {
+			if (!name || name === this.session) {
+				this.showSessions = false;
+				return;
+			}
+			this.session = name;
+			this.messages = [];
+			this.pending = null;
+			this.streamMsgId = null;
+			this.progress = "";
+			this.showSessions = false;
+			const meta = (this.sessions || []).find((s) => s.name === name);
+			if (meta) {
+				this.mode = meta.assistant_mode || this.mode;
+				this.sessionPinned = !!meta.is_pinned;
+			}
+			try {
+				const r = await frappe.call("chat_ai.api.chat.history", { session: name, limit: 80 });
+				if (!(r.message && r.message.ok)) return;
+				const rows = r.message.data || [];
+				for (const row of rows) {
+					let cj = {};
+					try {
+						cj = typeof row.content_json === "string"
+							? JSON.parse(row.content_json || "{}")
+							: row.content_json || {};
+					} catch (e) {
+						cj = {};
+					}
+					this.pushMessage(row.role || "assistant", {
+						text: row.content || "",
+						content_json: cj,
+					}, { history: true });
+				}
+			} catch (e) {
+				/* ignore */
+			}
+		},
+		async renameSession() {
+			if (!this.session) return;
+			const title = prompt(this.ui.rename, (this.sessions.find((s) => s.name === this.session) || {}).title || "");
+			if (title == null) return;
+			await frappe.call("chat_ai.api.chat.rename", { session: this.session, title });
+			await this.refreshSessions();
+		},
+		async togglePin() {
+			if (!this.session) return;
+			const next = this.sessionPinned ? 0 : 1;
+			await frappe.call("chat_ai.api.chat.pin", { session: this.session, pinned: next });
+			this.sessionPinned = !!next;
+			await this.refreshSessions();
+		},
+		async archiveSession() {
+			if (!this.session) return;
+			await frappe.call("chat_ai.api.chat.archive", { session: this.session });
+			this.session = null;
+			this.messages = [];
+			await this.refreshSessions();
+			if (this.sessions.length) await this.openSession(this.sessions[0].name);
+			else await this.newSession();
+		},
+		async deleteSession() {
+			if (!this.session) return;
+			if (!confirm(this.ui.delete + "?")) return;
+			await frappe.call("chat_ai.api.chat.delete_session", { session: this.session });
+			this.session = null;
+			this.messages = [];
+			await this.refreshSessions();
+			if (this.sessions.length) await this.openSession(this.sessions[0].name);
+			else await this.newSession();
+		},
+		async clearSession() {
+			if (!this.session) return;
+			await frappe.call("chat_ai.api.chat.clear", { session: this.session });
+			this.messages = [];
+			this.pending = null;
+		},
+		stopGeneration() {
+			this.streamStopped = true;
+			this.busy = false;
+			this.progress = "";
+			this.streamMsgId = null;
 		},
 		async setMode(mode) {
 			this.mode = mode;
@@ -401,21 +574,21 @@ chat_ai.sidebar.AppOptions = {
 				text: lines.join("\n") || "No commands available.",
 			});
 		},
-		pushMessage(role, payload) {
+		pushMessage(role, payload, opts = {}) {
 			const cj = payload.content_json || {};
 			const msg = {
 				id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
 				role,
 				text: payload.text || "",
 				blocks: cj.blocks || [],
-				needs_confirmation: !!cj.needs_confirmation,
-				needs_plan_approval: !!cj.needs_plan_approval,
+				needs_confirmation: !!cj.needs_confirmation && !opts.history,
+				needs_plan_approval: !!cj.needs_plan_approval && !opts.history,
 				pending_plan: cj.pending_plan || [],
 				pending_assumptions: cj.pending_assumptions || [],
 				confirmation_token: cj.confirmation_token || payload.confirmation_token || "",
 			};
 			this.messages.push(msg);
-			if (role === "assistant") {
+			if (role === "assistant" && !opts.history) {
 				if (msg.needs_confirmation) {
 					this.pending = {
 						kind: "tool",
@@ -436,7 +609,13 @@ chat_ai.sidebar.AppOptions = {
 				const box = this.$refs.messages;
 				if (box) box.scrollTop = box.scrollHeight;
 			});
-			if (role === "assistant" && this.autoSpeak && this.enableVoiceOut && msg.text) {
+			if (
+				role === "assistant" &&
+				!opts.history &&
+				this.autoSpeak &&
+				this.enableVoiceOut &&
+				msg.text
+			) {
 				this.speak(msg);
 			}
 			return msg;
@@ -714,7 +893,10 @@ chat_ai.sidebar.AppOptions = {
 		async sendRaw(message, extra = {}) {
 			if (!this.session) await this.newSession();
 			this.busy = true;
+			this.streamStopped = false;
 			this.progress = this.ui.working;
+			const streamMsg = this.pushMessage("assistant", { text: "", content_json: { blocks: [], streaming: true } });
+			this.streamMsgId = streamMsg.id;
 			try {
 				const r = await frappe.call({
 					method: "chat_ai.api.chat.send",
@@ -732,9 +914,12 @@ chat_ai.sidebar.AppOptions = {
 							: null,
 					},
 				});
+				if (this.streamStopped) return;
 				const payload = r.message || {};
+				const idx = this.messages.findIndex((m) => m.id === this.streamMsgId);
 				if (!payload.ok) {
-					this.pushMessage("assistant", { text: payload.error || "Error" });
+					if (idx >= 0) this.messages[idx].text = payload.error || "Error";
+					else this.pushMessage("assistant", { text: payload.error || "Error" });
 					return;
 				}
 				const data = payload.data || {};
@@ -748,22 +933,54 @@ chat_ai.sidebar.AppOptions = {
 					pending_args: data.pending_args,
 					confirmation_token: data.confirmation_token,
 				};
-				this.pushMessage("assistant", {
-					text: data.content || "",
-					content_json: cj,
-					confirmation_token: data.confirmation_token,
-				});
+				if (idx >= 0) {
+					const msg = this.messages[idx];
+					msg.text = data.content || msg.text || "";
+					msg.blocks = cj.blocks || [];
+					msg.needs_confirmation = !!cj.needs_confirmation;
+					msg.needs_plan_approval = !!cj.needs_plan_approval;
+					msg.pending_plan = cj.pending_plan || [];
+					msg.pending_assumptions = cj.pending_assumptions || [];
+					msg.confirmation_token = cj.confirmation_token || data.confirmation_token || "";
+					if (msg.needs_confirmation) {
+						this.pending = {
+							kind: "tool",
+							tool: cj.pending_tool,
+							args: cj.pending_args,
+							token: msg.confirmation_token,
+						};
+					} else if (msg.needs_plan_approval) {
+						this.pending = {
+							kind: "plan",
+							plan: msg.pending_plan,
+							assumptions: msg.pending_assumptions,
+							token: msg.confirmation_token,
+						};
+					}
+					if (this.autoSpeak && this.enableVoiceOut && msg.text) this.speak(msg);
+				} else {
+					this.pushMessage("assistant", {
+						text: data.content || "",
+						content_json: cj,
+						confirmation_token: data.confirmation_token,
+					});
+				}
+				await this.refreshSessions();
 			} catch (e) {
-				this.pushMessage("assistant", { text: e.message || "Request failed" });
+				const idx = this.messages.findIndex((m) => m.id === this.streamMsgId);
+				if (idx >= 0) this.messages[idx].text = e.message || "Request failed";
+				else this.pushMessage("assistant", { text: e.message || "Request failed" });
 			} finally {
 				this.busy = false;
 				this.progress = "";
+				this.streamMsgId = null;
 			}
 		},
 		bindRealtime() {
 			if (!frappe.realtime || !frappe.realtime.on) return;
 			frappe.realtime.on("chat_ai:progress", (data) => {
 				if (!data) return;
+				if (data.session && this.session && data.session !== this.session) return;
 				this.progress = data.label || data.stage || "";
 				if (data.stage === "done") {
 					setTimeout(() => {
@@ -772,7 +989,25 @@ chat_ai.sidebar.AppOptions = {
 				}
 			});
 			frappe.realtime.on("chat_ai:stream", (data) => {
-				if (data && data.done) this.progress = "";
+				if (!data) return;
+				if (data.session && this.session && data.session !== this.session) return;
+				if (this.streamStopped) return;
+				if (data.done) {
+					this.progress = "";
+					return;
+				}
+				const chunk = data.chunk || "";
+				if (!chunk) return;
+				let msg = this.messages.find((m) => m.id === this.streamMsgId);
+				if (!msg) {
+					msg = this.pushMessage("assistant", { text: "", content_json: { blocks: [] } });
+					this.streamMsgId = msg.id;
+				}
+				msg.text = (msg.text || "") + chunk;
+				this.$nextTick(() => {
+					const box = this.$refs.messages;
+					if (box) box.scrollTop = box.scrollHeight;
+				});
 			});
 		},
 	},
@@ -809,9 +1044,31 @@ chat_ai.sidebar.AppOptions = {
       <select class="cai-mode" :value="mode" @change="setMode($event.target.value)" title="Assistant mode">
         <option v-for="m in modes" :key="m" :value="m">{{ m }}</option>
       </select>
+      <button type="button" class="cai-icon-btn" :title="ui.sessions" @click="showSessions = !showSessions; refreshSessions()">☰</button>
       <button type="button" class="cai-icon-btn" :title="ui.newChat" @click="newSession">{{ ui.newChat }}</button>
       <button type="button" class="cai-icon-btn" title="Close" @click="toggle(false)">×</button>
     </header>
+
+    <div v-if="showSessions" class="cai-session-rail">
+      <input class="cai-session-search" v-model="sessionQuery" :placeholder="ui.searchSessions" @input="refreshSessions" />
+      <div class="cai-session-actions">
+        <button type="button" class="cai-icon-btn" @click="renameSession">{{ ui.rename }}</button>
+        <button type="button" class="cai-icon-btn" @click="togglePin">{{ sessionPinned ? ui.unpin : ui.pin }}</button>
+        <button type="button" class="cai-icon-btn" @click="clearSession">{{ ui.clear }}</button>
+        <button type="button" class="cai-icon-btn" @click="archiveSession">{{ ui.archive }}</button>
+        <button type="button" class="cai-icon-btn" @click="deleteSession">{{ ui.delete }}</button>
+      </div>
+      <button
+        v-for="s in sessions"
+        :key="s.name"
+        type="button"
+        class="cai-session-item"
+        :class="{ 'cai-session-item--active': s.name === session }"
+        @click="openSession(s.name)"
+      >
+        <span class="cai-session-title">{{ s.is_pinned ? '📌 ' : '' }}{{ s.title || s.name }}</span>
+      </button>
+    </div>
 
     <div class="cai-messages" ref="messages">
       <div v-if="!messages.length" class="cai-empty">
@@ -841,6 +1098,9 @@ chat_ai.sidebar.AppOptions = {
                 </tr>
               </tbody>
             </table>
+            <div v-if="b.type === 'table'" class="cai-artifact-actions">
+              <button type="button" class="cai-icon-btn" @click="copyText(JSON.stringify(b.data || {}))">{{ ui.copy }}</button>
+            </div>
             <div v-if="b.type === 'links' && Array.isArray(b.data)" class="cai-links">
               <button
                 v-for="(l, li) in b.data"
@@ -861,6 +1121,12 @@ chat_ai.sidebar.AppOptions = {
                 <li v-for="(s, si) in b.data.steps" :key="'s'+si">{{ s }}</li>
               </ol>
             </div>
+            <span v-if="b.type === 'badge' || b.type === 'status'" class="cai-badge">{{ b.data && (b.data.label || b.data.text || b.data) }}</span>
+            <details v-if="b.type === 'chart' || b.type === 'json' || b.type === 'artifact'" class="cai-artifact">
+              <summary>{{ ui.artifact }}</summary>
+              <pre class="cai-code"><code>{{ typeof b.data === 'string' ? b.data : JSON.stringify(b.data, null, 2) }}</code></pre>
+              <button type="button" class="cai-icon-btn" @click="copyText(typeof b.data === 'string' ? b.data : JSON.stringify(b.data, null, 2))">{{ ui.copy }}</button>
+            </details>
           </template>
 
           <div v-if="msg.needs_plan_approval" class="cai-confirm cai-confirm--plan">
@@ -924,9 +1190,16 @@ chat_ai.sidebar.AppOptions = {
           @click="toggleMic"
         >{{ listening ? '■' : '🎤' }}</button>
         <button
+          v-if="busy"
+          type="button"
+          class="cai-btn"
+          @click="stopGeneration"
+        >{{ ui.stopGen }}</button>
+        <button
+          v-else
           type="button"
           class="cai-btn cai-btn--primary cai-send"
-          :disabled="busy || !(input || '').trim()"
+          :disabled="!(input || '').trim()"
           @click="send"
         >{{ ui.send }}</button>
       </div>

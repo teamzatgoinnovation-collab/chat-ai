@@ -6,7 +6,7 @@ app_publisher = "ZatGo Innovation"
 app_description = "Marketplace-ready AI platform for ERPNext"
 app_email = "engineering@example.com"
 app_license = "mit"
-app_version = "0.1.0"
+app_version = "0.2.0"
 
 required_apps = ["erpnext"]
 

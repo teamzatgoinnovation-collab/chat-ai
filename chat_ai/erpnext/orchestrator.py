@@ -56,7 +56,7 @@ _MODE_ADDENDA = {
 def get_prompt_text(settings: dict, skill_prompts: list[str] | None = None) -> str:
 	from chat_ai.core.i18n import language_prompt
 
-	version = settings.get("prompt_bundle_version") or "v3"
+	version = settings.get("prompt_bundle_version") or "v4"
 	base_dir = Path(__file__).resolve().parents[1] / "core" / "prompts" / version
 	base = base_dir / "assistant.md"
 	if not base.exists():
@@ -66,7 +66,7 @@ def get_prompt_text(settings: dict, skill_prompts: list[str] | None = None) -> s
 	text += f"\n\nActive assistant mode: {mode}."
 	# Mode-specific addenda (v3+)
 	mode_key = _MODE_ADDENDA.get(mode)
-	if mode_key and version == "v3":
+	if mode_key and version in ("v3", "v4"):
 		mode_file = base_dir / "modes" / f"{mode_key}.md"
 		if mode_file.exists():
 			text += "\n\n" + mode_file.read_text()
@@ -78,7 +78,28 @@ def get_prompt_text(settings: dict, skill_prompts: list[str] | None = None) -> s
 	return text
 
 
-def collect_tools(skill_names: list[str] | None = None) -> list[ToolSpec]:
+# Core helpers always kept when shortlisting tools
+_CORE_HELPER_TOOLS = frozenset(
+	{
+		"search",
+		"erp_search",
+		"global_search",
+		"vector_search",
+		"metadata_search",
+		"list_documents",
+		"get_document",
+		"get_doctype_meta",
+	}
+)
+
+
+def collect_tools(
+	skill_names: list[str] | None = None,
+	*,
+	candidate_tools: list[str] | None = None,
+	settings: dict | None = None,
+) -> list[ToolSpec]:
+	settings = settings or {}
 	skills = list_skills()
 	if not skills:
 		load_skills()
@@ -91,15 +112,37 @@ def collect_tools(skill_names: list[str] | None = None) -> list[ToolSpec]:
 		if s.name not in wanted:
 			continue
 		tools.extend(s.tools or [])
-	try:
-		from chat_ai.plugin.api import get_registered_tools
+	if settings.get("enable_plugin_tools", 1):
+		try:
+			from chat_ai.plugin.api import get_registered_tools
 
-		tools.extend(get_registered_tools())
+			tools.extend(get_registered_tools())
+		except Exception:
+			pass
+	# External tool sources (REST / MCP / integrations)
+	try:
+		from chat_ai.core.tool_sources import load_external_tools
+
+		tools.extend(load_external_tools(settings))
 	except Exception:
 		pass
 	# dedupe by name
 	by_name = {t.name: t for t in tools}
-	return list(by_name.values())
+	tools = list(by_name.values())
+	# Prefer planner shortlist when present; always keep core helpers
+	if candidate_tools:
+		wanted_names = set(candidate_tools) | _CORE_HELPER_TOOLS
+		shortlisted = [t for t in tools if t.name in wanted_names]
+		if shortlisted:
+			# Ensure at least one search helper survives thin shortlists
+			names = {t.name for t in shortlisted}
+			if not names & _CORE_HELPER_TOOLS:
+				for t in tools:
+					if t.name in _CORE_HELPER_TOOLS:
+						shortlisted.append(t)
+						break
+			tools = shortlisted
+	return tools
 
 
 def run_turn(
@@ -130,6 +173,12 @@ def run_turn(
 
 	memory = _load_memory(session_name)
 	context = build_context_stack(client_context, memory.entities)
+	if settings.get("enable_conversation_memory", 1) and memory.entities:
+		context = dict(context or {})
+		context["entities"] = memory.entities
+		context["memory_note"] = (
+			"Use entities as established working memory; do not re-ask for these values."
+		)
 	load_skills()
 	available = [s.name for s in list_skills()]
 
@@ -159,15 +208,17 @@ def run_turn(
 
 	# --- Token-based plan approval resume ---
 	approved_plan = None
+	approved_candidate_tools = None
 	if confirmation_token and (plan_confirmed or is_plan_approval_text(user_message)):
 		stored = consume_token(session_name, confirmation_token, expected_kind="plan")
 		if stored:
 			approved_plan = stored.get("plan") or []
+			approved_candidate_tools = stored.get("candidate_tools")
 			plan_confirmed = True
 			msg = stored.get("original_message") or msg
 
 	if confirmed and pending_tool:
-		tools = collect_tools(available)
+		tools = collect_tools(available, settings=settings)
 		router = ToolRouter(
 			tools,
 			policy=policy,
@@ -182,7 +233,7 @@ def run_turn(
 			confirmed=True,
 			risk_level="medium",
 		)
-		_log_tool(session_name, pending_tool, enriched, result)
+		_log_tool(session_name, pending_tool, enriched, result, tool_spec=tool_spec)
 		resp = build_from_tool_results(
 			[{"ok": result.ok, "tool": pending_tool, "data": result.data, "error": result.error}]
 		)
@@ -196,6 +247,8 @@ def run_turn(
 
 	skill_prompts = []
 	history = memory.window(int(settings.get("max_history_length") or 40))
+	# Tool names for planner shortlist (skills only; external tools added after plan)
+	probe_tools = collect_tools(available, settings={**settings, "enable_rest_tools": 0, "enable_mcp_tools": 0, "enable_integrations": 0})
 	plan = run_planner(
 		provider,
 		user_message=msg,
@@ -203,6 +256,7 @@ def run_turn(
 		context=context,
 		history=history,
 		available_skills=available,
+		available_tool_names=[t.name for t in probe_tools],
 	)
 
 	if plan.needs_clarification:
@@ -211,6 +265,7 @@ def run_turn(
 
 	# Simple question — direct answer without tools
 	if plan.is_simple_question and not plan.needs_plan_approval:
+		settings["_stream_session"] = session_name
 		resp = _direct_answer(provider, settings, msg, context, history, plan)
 		return _persist(session, memory, user_message, resp, settings, tokens=(plan.tokens_in, plan.tokens_out), model=plan.model)
 
@@ -224,6 +279,7 @@ def run_turn(
 				"assumptions": plan.assumptions,
 				"original_message": msg,
 				"candidate_skills": plan.candidate_skills,
+				"candidate_tools": plan.candidate_tools,
 				"risk_level": plan.risk_level,
 			},
 		)
@@ -236,6 +292,7 @@ def run_turn(
 		return _persist(session, memory, user_message, resp, settings, tokens=(plan.tokens_in, plan.tokens_out), model=plan.model)
 
 	candidates = candidate_override or plan.candidate_skills or ["core"]
+	tool_shortlist = approved_candidate_tools or plan.candidate_tools or None
 	if approved_plan:
 		msg = msg + "\n\n[Approved plan]\n" + "\n".join(f"- {s}" for s in approved_plan)
 	skills = [s for s in list_skills() if s.name in candidates]
@@ -244,7 +301,7 @@ def run_turn(
 			skill_prompts.append(s.prompt)
 
 	publish_progress(session_name, "routing")
-	tools = collect_tools(candidates)
+	tools = collect_tools(candidates, candidate_tools=tool_shortlist, settings=settings)
 	router = ToolRouter(
 		tools,
 		policy=policy,
@@ -257,6 +314,7 @@ def run_turn(
 		if "search" in router.tools:
 			args = enrich_tool_args(router.get("search"), {"query": user_message}, context)
 			sr = router.run("search", args, confirmed=True, risk_level=risk_level)
+			_log_tool(session_name, "search", args, sr, tool_spec=router.get("search"))
 			resp = build_from_tool_results([{"ok": sr.ok, "tool": "search", "data": sr.data, "error": sr.error}])
 		else:
 			resp = AssistantResponse(markdown=plan.raw_content or f"Intent: {plan.intent}")
@@ -266,12 +324,16 @@ def run_turn(
 	assumption_note = ""
 	if plan.assumptions:
 		assumption_note = "Assumptions:\n" + "\n".join(f"- {a}" for a in plan.assumptions[:5])
+	memory_note = ""
+	if settings.get("enable_conversation_memory", 1) and memory.entities:
+		memory_note = "\n\nWorking memory entities:\n" + json.dumps(memory.entities, default=str)[:2000]
 	messages = [
 		LLMMessage(role="system", content=get_prompt_text(settings, skill_prompts)),
 		LLMMessage(
 			role="system",
 			content="Context:\n" + json.dumps(context, default=str)[:6000]
-			+ (("\n\n" + assumption_note) if assumption_note else ""),
+			+ (("\n\n" + assumption_note) if assumption_note else "")
+			+ memory_note,
 		),
 	]
 	for h in history[-10:]:
@@ -286,11 +348,17 @@ def run_turn(
 		result = provider.chat(messages, tools=openai_tools or None)
 		total_in += result.tokens_in
 		total_out += result.tokens_out
-		if settings.get("enable_streaming", 1) and result.content:
-			publish_stream(session_name, result.content, done=False)
 
 		if not result.tool_calls:
-			md = result.content or "Done."
+			md = _stream_final_answer(
+				provider,
+				messages,
+				settings,
+				session_name,
+				fallback=result.content or "Done.",
+				assumptions=plan.assumptions,
+				already_content=result.content,
+			)
 			if plan.assumptions and plan.assumptions[0] not in md:
 				md = "\n".join(plan.assumptions[:3]) + "\n\n" + md
 			resp = AssistantResponse(markdown=md)
@@ -312,7 +380,7 @@ def run_turn(
 			tool_spec = router.get(name)
 			args = enrich_tool_args(tool_spec, args, context)
 			tr = router.run(name, args, confirmed=False, risk_level=risk_level)
-			_log_tool(session_name, name, args, tr)
+			_log_tool(session_name, name, args, tr, tool_spec=tool_spec)
 			if tr.needs_confirmation:
 				token = issue_token(
 					session_name,
@@ -341,6 +409,41 @@ def run_turn(
 	return _persist(session, memory, user_message, resp, settings, tokens=(total_in, total_out))
 
 
+def _stream_final_answer(
+	provider,
+	messages,
+	settings,
+	session_name,
+	*,
+	fallback: str,
+	assumptions=None,
+	already_content: str | None = None,
+) -> str:
+	"""Stream final assistant text when enabled; otherwise return fallback content."""
+	# When the non-stream chat already returned content without tool_calls, publish it
+	# and optionally re-stream via chat_stream only if we have no content yet.
+	if already_content:
+		if settings.get("enable_streaming", 1):
+			# Publish incrementally for UX (provider already completed; chunk for client)
+			text = already_content
+			step = max(1, len(text) // 24) if text else 1
+			for i in range(0, len(text), step):
+				publish_stream(session_name, text[i : i + step], done=False)
+		return already_content
+	if not settings.get("enable_streaming", 1):
+		return fallback
+	parts: list[str] = []
+	try:
+		for chunk in provider.chat_stream(messages):
+			if not chunk:
+				continue
+			parts.append(chunk)
+			publish_stream(session_name, chunk, done=False)
+	except Exception:
+		return fallback
+	return "".join(parts) or fallback
+
+
 def _direct_answer(provider, settings, msg, context, history, plan):
 	"""Answer simple how-to / explanation questions without tool calls."""
 	messages = [
@@ -355,8 +458,27 @@ def _direct_answer(provider, settings, msg, context, history, plan):
 			content=msg + "\n\n(Answer concisely. No tools. No long documentation.)",
 		)
 	)
-	result = provider.chat(messages)
-	md = result.content or plan.raw_content or "Done."
+	session_name = ""
+	try:
+		# best-effort streaming for simple answers when session is known via settings
+		session_name = settings.get("_stream_session") or ""
+	except Exception:
+		session_name = ""
+	if settings.get("enable_streaming", 1) and session_name and hasattr(provider, "chat_stream"):
+		parts: list[str] = []
+		try:
+			for chunk in provider.chat_stream(messages):
+				if chunk:
+					parts.append(chunk)
+					publish_stream(session_name, chunk, done=False)
+			md = "".join(parts)
+			publish_stream(session_name, "", done=True)
+		except Exception:
+			result = provider.chat(messages)
+			md = result.content or plan.raw_content or "Done."
+	else:
+		result = provider.chat(messages)
+		md = result.content or plan.raw_content or "Done."
 	if plan.assumptions:
 		md = "\n".join(plan.assumptions[:3]) + "\n\n" + md
 	return AssistantResponse(markdown=md)
@@ -404,7 +526,7 @@ def _persist(session, memory, user_message, resp: AssistantResponse, settings, t
 			"content_json": frappe.as_json(resp.to_content_json()),
 			"model": model,
 			"provider": settings.get("provider"),
-			"prompt_version": settings.get("prompt_bundle_version") or "v3",
+			"prompt_version": settings.get("prompt_bundle_version") or "v4",
 			"tokens_in": tokens[0],
 			"tokens_out": tokens[1],
 			"latency_ms": int((time.time() - start) * 1000),
@@ -453,20 +575,26 @@ def _save_memory(session_name: str, memory: ConversationMemory):
 		frappe.get_doc({"doctype": "AI Chat Memory", **payload}).insert(ignore_permissions=True)
 
 
-def _log_tool(session_name, name, args, result):
+def _log_tool(session_name, name, args, result, tool_spec=None):
 	try:
 		if not frappe.db.get_single_value("Chat AI Settings", "enable_audit_logs"):
 			return
-		tool = None
-		# category unknown here — store args
+		# Never persist secrets
+		safe_args = _redact_args(args or {})
+		source = "python"
+		category = ""
+		if tool_spec is not None:
+			source = getattr(tool_spec, "source", None) or "python"
+			category = getattr(tool_spec, "category", None) or ""
 		frappe.get_doc(
 			{
 				"doctype": "AI Tool Log",
 				"session": session_name,
 				"user": frappe.session.user,
 				"tool_name": name,
-				"source": "python",
-				"args_json": frappe.as_json(args),
+				"source": source,
+				"category": category,
+				"args_json": frappe.as_json(safe_args),
 				"result_json": frappe.as_json({"data": result.data, "error": result.error}),
 				"permission_ok": 1 if result.permission_ok else 0,
 				"success": 1 if result.ok else 0,
@@ -476,6 +604,17 @@ def _log_tool(session_name, name, args, result):
 		).insert(ignore_permissions=True)
 	except Exception:
 		pass
+
+
+def _redact_args(args: dict) -> dict:
+	sensitive = {"api_key", "api_token", "auth_token", "password", "secret", "token", "authorization"}
+	out = {}
+	for k, v in (args or {}).items():
+		if str(k).lower() in sensitive or "token" in str(k).lower() or "secret" in str(k).lower():
+			out[k] = "***"
+		else:
+			out[k] = v
+	return out
 
 
 def _cost(settings, tin, tout) -> float:

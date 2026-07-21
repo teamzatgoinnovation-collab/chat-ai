@@ -73,8 +73,11 @@ def discover(roots: list[str] | None = None, *, doctype_exists=None, app_install
 		for child in sorted(root_path.iterdir()):
 			if not child.is_dir() or child.name.startswith("_"):
 				continue
-			# integrations nested
+			# integrations: load parent package (if skill.yaml) plus nested connector skills
 			if child.name == "integrations":
+				parent = _load_skill_dir(child)
+				if parent:
+					found.append(parent)
 				for integ in sorted(child.iterdir()):
 					if integ.is_dir() and not integ.name.startswith("_"):
 						spec = _load_skill_dir(integ)

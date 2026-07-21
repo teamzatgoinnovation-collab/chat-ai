@@ -5,10 +5,10 @@ from __future__ import annotations
 import json
 import urllib.error
 import urllib.request
-from typing import Any
+from typing import Any, Iterator
 
 from chat_ai.core.providers.base import LLMMessage, LLMProvider, LLMResult
-from chat_ai.core.providers.capabilities import Capabilities, PROVIDER_DEFAULTS
+from chat_ai.core.providers.capabilities import PROVIDER_DEFAULTS
 
 
 class OpenAICompatProvider(LLMProvider):
@@ -87,6 +87,30 @@ class OpenAICompatProvider(LLMProvider):
 			body = exc.read().decode("utf-8", errors="replace")
 			raise RuntimeError(f"LLM HTTP {exc.code}: {body[:500]}") from exc
 
+	def _build_payload(
+		self,
+		messages: list[LLMMessage],
+		*,
+		tools: list[dict] | None = None,
+		stream: bool = False,
+		response_format: str | None = None,
+		**opts: Any,
+	) -> dict[str, Any]:
+		payload: dict[str, Any] = {
+			"model": self.model,
+			"messages": self._serialize_messages(messages),
+			"temperature": self.temperature,
+			"max_tokens": self.max_tokens,
+		}
+		if stream:
+			payload["stream"] = True
+		if tools and self.capabilities.tool_calling:
+			payload["tools"] = tools
+			payload["tool_choice"] = opts.get("tool_choice", "auto")
+		if response_format == "json" and self.capabilities.json_output:
+			payload["response_format"] = {"type": "json_object"}
+		return payload
+
 	def chat(
 		self,
 		messages: list[LLMMessage],
@@ -97,18 +121,9 @@ class OpenAICompatProvider(LLMProvider):
 		reasoning: bool = False,
 		**opts: Any,
 	) -> LLMResult:
-		payload: dict[str, Any] = {
-			"model": self.model,
-			"messages": self._serialize_messages(messages),
-			"temperature": self.temperature,
-			"max_tokens": self.max_tokens,
-		}
-		if tools and self.capabilities.tool_calling:
-			payload["tools"] = tools
-			payload["tool_choice"] = opts.get("tool_choice", "auto")
-		if response_format == "json" and self.capabilities.json_output:
-			payload["response_format"] = {"type": "json_object"}
-		# stream handled by caller via chat_stream; non-stream completion here
+		payload = self._build_payload(
+			messages, tools=tools, stream=False, response_format=response_format, **opts
+		)
 		raw = self._post(self._chat_url(), payload)
 		choice = (raw.get("choices") or [{}])[0]
 		message = choice.get("message") or {}
@@ -122,13 +137,61 @@ class OpenAICompatProvider(LLMProvider):
 			model=raw.get("model") or self.model,
 		)
 
-	def chat_stream(self, messages: list[LLMMessage], **opts: Any):
-		# Minimal: non-stream fallback chunks (full SSE optional later)
-		result = self.chat(messages, stream=False, **opts)
-		text = result.content or ""
-		step = max(1, len(text) // 20) if text else 1
-		for i in range(0, len(text), step):
-			yield text[i : i + step]
+	def chat_stream(self, messages: list[LLMMessage], **opts: Any) -> Iterator[str]:
+		"""Yield content deltas from OpenAI-compatible SSE streaming."""
+		if not getattr(self.capabilities, "streaming", True):
+			result = self.chat(messages, stream=False, **opts)
+			text = result.content or ""
+			if text:
+				yield text
+			return
+
+		payload = self._build_payload(messages, stream=True, **opts)
+		# Do not attach tools on stream path — final narrative only
+		payload.pop("tools", None)
+		payload.pop("tool_choice", None)
+		data = json.dumps(payload).encode("utf-8")
+		headers = self._headers()
+		headers["Accept"] = "text/event-stream"
+		req = urllib.request.Request(self._chat_url(), data=data, headers=headers, method="POST")
+		try:
+			with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+				while True:
+					raw_line = resp.readline()
+					if not raw_line:
+						break
+					line = raw_line.decode("utf-8", errors="replace").strip()
+					if not line or line.startswith(":"):
+						continue
+					if not line.startswith("data:"):
+						continue
+					data_str = line[5:].strip()
+					if data_str == "[DONE]":
+						break
+					try:
+						obj = json.loads(data_str)
+					except json.JSONDecodeError:
+						continue
+					choice = (obj.get("choices") or [{}])[0]
+					delta = choice.get("delta") or {}
+					piece = delta.get("content")
+					if piece:
+						yield piece
+		except urllib.error.HTTPError as exc:
+			body = exc.read().decode("utf-8", errors="replace")
+			# Fallback to non-stream if provider rejects stream
+			if exc.code in (400, 404, 501):
+				result = self.chat(messages, stream=False, **opts)
+				text = result.content or ""
+				if text:
+					yield text
+				return
+			raise RuntimeError(f"LLM HTTP {exc.code}: {body[:500]}") from exc
+		except Exception:
+			result = self.chat(messages, stream=False, **opts)
+			text = result.content or ""
+			if text:
+				yield text
 
 	def embed(self, texts: list[str]) -> list[list[float]]:
 		if not self.capabilities.embedding:

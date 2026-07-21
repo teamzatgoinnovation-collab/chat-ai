@@ -121,6 +121,37 @@ class TestPlanner(unittest.TestCase):
 		self.assertEqual(plan.risk_level, "high")
 		self.assertEqual(len(plan.implementation_plan), 2)
 
+	def test_parse_candidate_tools(self):
+		raw = """{
+			"intent": "create task",
+			"candidate_skills": ["projects", "core"],
+			"candidate_tools": ["create_task", "search", "unknown_tool"],
+			"risk_level": "low",
+			"is_simple_question": false,
+			"needs_plan_approval": false,
+			"needs_clarification": false
+		}"""
+		plan = _parse_plan(
+			raw,
+			["projects", "core"],
+			{},
+			available_tool_names=["create_task", "search", "list_documents"],
+		)
+		self.assertEqual(plan.candidate_tools, ["create_task", "search"])
+
+
+class TestRestToolSpec(unittest.TestCase):
+	def test_build_rest_tool_spec(self):
+		from chat_ai.core.tool_sources.rest import build_rest_tool_spec
+
+		spec = build_rest_tool_spec(tool_name="get_weather", description="Weather")
+		self.assertEqual(spec.source, "rest")
+		self.assertEqual(spec.name, "get_weather")
+		self.assertTrue(callable(spec.handler))
+		openai = spec.to_openai_tool()
+		self.assertEqual(openai["function"]["name"], "get_weather")
+
+
 
 class TestPlanApprovalResponse(unittest.TestCase):
 	def test_plan_approval_shape(self):

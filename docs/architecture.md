@@ -28,12 +28,13 @@ Features enable/disable from discovered capabilities.
 ## Safety
 
 - Tool categories: Read / Write / Admin
-- **Prompt bundle v3** (default): concise ERP consultant behavior, intelligent defaults, plan-before-change
+- **Prompt bundle v4** (default): planning, memory-aware context, tighter tool selection (v3 still available)
 - **Tiered confirmation:** low-risk single creates (e.g. Task) skip confirm; medium/high always confirm
 - **Plan approval:** multi-step mutations show numbered plan + OK/Cancel before tools run
 - **Confirmation tokens:** server-side cache tokens; client cannot forge `confirmed=1` alone
 - Agent loop limits in Chat AI Settings
 - Approval Engine for workflow actions
+- External tools: REST / MCP / integrations load only when Settings flags are on; role-gated
 
 ## Intelligent defaults
 
@@ -42,9 +43,21 @@ user default → single record on site → omit.
 
 Injected into context as `intelligent_defaults` + `assumptions`, merged into tool args via `core/tool_enrichment.py` (never overrides explicit values).
 
-## Decision flow (v3)
+## Decision flow (v4)
 
-1. Planner returns `is_simple_question`, `needs_plan_approval`, `risk_level`, `implementation_plan`
-2. Simple questions → direct LLM answer (no tools)
+1. Planner returns `is_simple_question`, `needs_plan_approval`, `risk_level`, `implementation_plan`, optional `candidate_tools`
+2. Simple questions → direct LLM answer (streaming when enabled)
 3. Plan required → show plan + token; resume on OK
-4. Tool loop with enriched args and risk-tier confirmation
+4. Tool loop with shortlisted tools, enriched args, and risk-tier confirmation
+5. Final narrative streams via OpenAI-compatible SSE when `enable_streaming` is on
+
+## External tool sources
+
+`core/tool_sources/` loads DocType-backed tools when flags are enabled:
+
+| Flag | Source | DocType |
+|------|--------|---------|
+| `enable_rest_tools` | REST HTTP | AI REST Tool |
+| `enable_mcp_tools` | MCP JSON-RPC (http/sse) | AI MCP Server |
+| `enable_integrations` | GitHub / Slack / Custom (+ stubs) | AI Integration Connector |
+| `enable_plugin_tools` | Platform SDK | `chat_ai_plugins` hooks |

@@ -43,3 +43,15 @@ my_skill/
 ```
 
 Point Chat AI at extra roots via `register_skill_path("/path/to/skills")` or ship under an app and register on setup.
+
+## DocType connectors (v0.2)
+
+Without writing a plugin, managers can expose tools via Desk:
+
+1. **AI REST Tool** — OpenAPI-style HTTP tools (`url_template`, method, auth, JSON schema)
+2. **AI MCP Server** — MCP `tools/list` + `tools/call` over http/sse (stdio stores discovered tools only)
+3. **AI Integration Connector** — GitHub, Slack, Custom HTTP (other services stub until later)
+
+Gate with Chat AI Settings: `enable_plugin_tools`, `enable_rest_tools`, `enable_mcp_tools`, `enable_integrations`.
+ToolSpecs use `source` in `{python,erp,plugin,rest,mcp}` and appear in **AI Tool Log**.
+

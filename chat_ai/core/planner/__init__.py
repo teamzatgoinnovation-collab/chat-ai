@@ -17,6 +17,7 @@ class Plan:
 	needs_clarification: bool = False
 	clarification_question: str = ""
 	candidate_skills: list[str] = field(default_factory=list)
+	candidate_tools: list[str] = field(default_factory=list)
 	is_simple_question: bool = False
 	risk_level: str = "medium"  # low|medium|high
 	assumptions: list[str] = field(default_factory=list)
@@ -36,19 +37,22 @@ Respond with JSON only:
   "is_simple_question": false,
   "risk_level": "low",
   "assumptions": ["Using Company: X (only available company)"],
-  "implementation_plan": ["Step one", "Step two"],
+  "implementation_plan": ["Step one — tool: search", "Step two — tool: create_task"],
   "needs_plan_approval": false,
   "needs_clarification": false,
   "clarification_question": "",
-  "candidate_skills": ["core"]
+  "candidate_skills": ["core"],
+  "candidate_tools": ["search", "create_task"]
 }
 
 Rules:
 - is_simple_question=true for how-to, definitions, navigation help (no ERP data mutation).
 - needs_plan_approval=true when the request will create/update/delete/submit multiple records or bulk operations.
 - risk_level: low (single safe create/read), medium (single submit/SO/PO), high (delete/bulk/import/settings).
-- Use intelligent_defaults and context assumptions when available; do not ask for values already resolved.
+- Use intelligent_defaults, context, and memory entities when available; do not ask for values already resolved.
 - Never invent ERPNext document names or IDs. If required slots are missing, set needs_clarification true.
+- candidate_tools: optional shortlist of tool names likely needed (prefer narrow skill tools over generic CRUD).
+- Prefer naming the tool in each implementation_plan step when known.
 """
 
 
@@ -60,6 +64,7 @@ def plan(
 	context: dict | None = None,
 	history: list[dict] | None = None,
 	available_skills: list[str] | None = None,
+	available_tool_names: list[str] | None = None,
 ) -> Plan:
 	messages: list[LLMMessage] = [
 		LLMMessage(role="system", content=system_prompt + "\n\n" + PLAN_SCHEMA_HINT),
@@ -78,13 +83,21 @@ def plan(
 				content="Available skills: " + ", ".join(available_skills),
 			)
 		)
+	if available_tool_names:
+		messages.append(
+			LLMMessage(
+				role="system",
+				content="Known tool names (prefer these in candidate_tools): "
+				+ ", ".join(available_tool_names[:80]),
+			)
+		)
 	for h in history or []:
 		messages.append(LLMMessage(role=h.get("role") or "user", content=h.get("content") or ""))
 	messages.append(LLMMessage(role="user", content=user_message))
 
 	use_json = provider.capabilities.json_output
 	result: LLMResult = provider.chat(messages, response_format="json" if use_json else None)
-	parsed = _parse_plan(result.content, available_skills or ["core"], context)
+	parsed = _parse_plan(result.content, available_skills or ["core"], context, available_tool_names)
 	parsed.raw_content = result.content or ""
 	parsed.tokens_in = result.tokens_in
 	parsed.tokens_out = result.tokens_out
@@ -92,7 +105,12 @@ def plan(
 	return parsed
 
 
-def _parse_plan(content: str, skills: list[str], context: dict | None = None) -> Plan:
+def _parse_plan(
+	content: str,
+	skills: list[str],
+	context: dict | None = None,
+	available_tool_names: list[str] | None = None,
+) -> Plan:
 	data = {}
 	text = (content or "").strip()
 	try:
@@ -129,12 +147,21 @@ def _parse_plan(content: str, skills: list[str], context: dict | None = None) ->
 	impl = data.get("implementation_plan") or []
 	if isinstance(impl, str):
 		impl = [impl]
+	tool_cands = data.get("candidate_tools") or []
+	if isinstance(tool_cands, str):
+		tool_cands = [tool_cands]
+	known = set(available_tool_names or [])
+	if known:
+		tool_cands = [t for t in tool_cands if t in known]
+	else:
+		tool_cands = [str(t) for t in tool_cands if t]
 	return Plan(
 		intent=str(data.get("intent") or "general"),
 		slots=data.get("slots") or {},
 		needs_clarification=bool(data.get("needs_clarification")),
 		clarification_question=str(data.get("clarification_question") or ""),
 		candidate_skills=cands,
+		candidate_tools=tool_cands,
 		is_simple_question=bool(data.get("is_simple_question")),
 		risk_level=risk,
 		assumptions=[str(a) for a in assumptions if a],
