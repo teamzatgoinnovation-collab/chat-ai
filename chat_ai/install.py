@@ -131,6 +131,18 @@ def _ensure_settings():
 			doc.enable_voice_input = 1
 			doc.enable_voice_output = 1
 			frappe.db.set_global("chat_ai_voice_bootstrapped", "1")
+		# Platform v0.2.5 defaults (Check fields migrate as 0)
+		if not frappe.db.get_global("chat_ai_platform_025_bootstrapped"):
+			doc.enable_plugin_discovery = 1
+			doc.enable_event_stream = 1
+			doc.enable_artifact_store = 1
+			if not getattr(doc, "max_parallel_tools", None):
+				doc.max_parallel_tools = 1
+			if getattr(doc, "tool_max_retries", None) in (None, 0) and not frappe.db.get_global(
+				"chat_ai_platform_025_retries_touched"
+			):
+				doc.tool_max_retries = 1
+			frappe.db.set_global("chat_ai_platform_025_bootstrapped", "1")
 		doc.save(ignore_permissions=True)
 	except Exception:
 		frappe.log_error(title="chat_ai ensure settings")
