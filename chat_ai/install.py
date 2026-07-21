@@ -108,12 +108,12 @@ def _ensure_settings():
 			doc.default_model = "gpt-4o"
 		if not getattr(doc, "default_language", None):
 			doc.default_language = "en"
-		# Bootstrap v4 once for upgrades from v1–v3; leave later explicit choices alone after flag set
-		if not frappe.db.get_global("chat_ai_prompt_v4_bootstrapped"):
+		# Bootstrap v4 once for upgrades from v1–v3 (flag keyed to v0.2 release)
+		if not frappe.db.get_global("chat_ai_prompt_v4_bootstrapped_02"):
 			cur = getattr(doc, "prompt_bundle_version", None) or ""
 			if cur in ("", "v1", "v2", "v3"):
 				doc.prompt_bundle_version = "v4"
-			frappe.db.set_global("chat_ai_prompt_v4_bootstrapped", "1")
+			frappe.db.set_global("chat_ai_prompt_v4_bootstrapped_02", "1")
 		elif not getattr(doc, "prompt_bundle_version", None):
 			doc.prompt_bundle_version = "v4"
 		# Check fields migrate as 0; turn voice on once unless already bootstrapped
