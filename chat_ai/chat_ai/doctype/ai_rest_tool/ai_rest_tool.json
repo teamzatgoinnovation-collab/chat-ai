@@ -13,7 +13,14 @@
   "json_schema",
   "allowed_roles",
   "enabled",
-  "category"
+  "category",
+  "lifecycle_section",
+  "lifecycle_status",
+  "last_health_at",
+  "last_health_ok",
+  "latency_ms",
+  "last_error",
+  "retry_policy"
  ],
  "fields": [
   {
@@ -76,6 +83,49 @@
    "label": "Category",
    "options": "read\nwrite\nadmin",
    "default": "read"
+  },
+  {
+   "fieldname": "lifecycle_section",
+   "fieldtype": "Section Break",
+   "label": "Lifecycle"
+  },
+  {
+   "default": "Enabled",
+   "fieldname": "lifecycle_status",
+   "fieldtype": "Select",
+   "label": "Lifecycle Status",
+   "options": "Draft\nTesting\nEnabled\nDisabled\nFailed"
+  },
+  {
+   "fieldname": "last_health_at",
+   "fieldtype": "Datetime",
+   "label": "Last Health At",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "last_health_ok",
+   "fieldtype": "Check",
+   "label": "Last Health OK",
+   "read_only": 1
+  },
+  {
+   "fieldname": "latency_ms",
+   "fieldtype": "Int",
+   "label": "Latency (ms)",
+   "read_only": 1
+  },
+  {
+   "fieldname": "last_error",
+   "fieldtype": "Small Text",
+   "label": "Last Error",
+   "read_only": 1
+  },
+  {
+   "fieldname": "retry_policy",
+   "fieldtype": "Data",
+   "label": "Retry Policy",
+   "description": "e.g. max_retries=2"
   }
  ],
  "issingle": 0,

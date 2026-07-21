@@ -1,4 +1,4 @@
-"""Tool router — category gate, confirmation, execute via source handlers."""
+"""Tool router — category gate, confirmation, execute via ToolPipeline."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import time
 from typing import Any, Callable
 
 from chat_ai.core.agent_limits import AgentLimits
+from chat_ai.core.tool_pipeline import ToolPipeline
 from chat_ai.core.tool_router.spec import (
 	CATEGORY_READ,
 	ConfirmationPolicy,
@@ -22,11 +23,30 @@ class ToolRouter:
 		policy: ConfirmationPolicy | None = None,
 		limits: AgentLimits | None = None,
 		progress: Callable[[str, str], None] | None = None,
+		session: str | None = None,
+		timeout_seconds: int = 60,
+		max_retries: int = 0,
+		publisher=None,
+		permission_engine=None,
 	):
 		self.tools = {t.name: t for t in tools}
 		self.policy = policy or ConfirmationPolicy()
 		self.limits = limits or AgentLimits()
 		self.progress = progress or (lambda stage, detail="": None)
+		self.session = session
+		self.publisher = publisher
+		self.permission_engine = permission_engine
+		self._pipeline = ToolPipeline(
+			self.tools,
+			policy=self.policy,
+			limits=self.limits,
+			progress=self.progress,
+			session=session,
+			timeout_seconds=timeout_seconds,
+			max_retries=max_retries,
+			publisher=publisher,
+			permission_engine=permission_engine,
+		)
 		self._calls = 0
 
 	def list_openai_tools(self) -> list[dict]:
@@ -50,36 +70,20 @@ class ToolRouter:
 		confirmed: bool = False,
 		risk_level: str = "medium",
 	) -> ToolResult:
-		args = args or {}
-		tool = self.tools.get(name)
-		if not tool:
-			return ToolResult(ok=False, error=f"Unknown tool: {name}")
-		if not self.policy.category_allowed(tool.category):
-			return ToolResult(
-				ok=False,
-				error=f"Tool category '{tool.category}' is not allowed",
-				permission_ok=False,
-			)
-		if self._calls >= self.limits.max_tool_calls:
-			return ToolResult(ok=False, error="Max tool calls exceeded")
-
-		if self.policy.needs_confirmation(tool, args, risk_level=risk_level) and not confirmed:
-			msg = _confirmation_message(tool, args)
-			return ToolResult(ok=False, needs_confirmation=True, confirmation_message=msg, data=args)
-
-		stage = _progress_stage(tool)
-		self.progress(stage, tool.name)
-		start = time.time()
-		self._calls += 1
-		try:
-			if not tool.handler:
-				return ToolResult(ok=False, error="Tool has no handler", latency_ms=_ms(start))
-			data = _invoke(tool.handler, args)
-			return ToolResult(ok=True, data=data, latency_ms=_ms(start))
-		except PermissionError as exc:
-			return ToolResult(ok=False, error=str(exc), permission_ok=False, latency_ms=_ms(start))
-		except Exception as exc:
-			return ToolResult(ok=False, error=str(exc), latency_ms=_ms(start))
+		result = self._pipeline.run(
+			name,
+			args,
+			confirmed=confirmed,
+			risk_level=risk_level,
+			category_allowed_fn=lambda tool: self.policy.category_allowed(tool.category),
+			needs_confirmation_fn=lambda tool, a, rl: self.policy.needs_confirmation(
+				tool, a, risk_level=rl
+			),
+			progress_stage_fn=_progress_stage,
+			invoke_fn=lambda tool, a: _invoke(tool.handler, a),
+		)
+		self._calls = self._pipeline._calls
+		return result
 
 
 def _ms(start: float) -> int:
@@ -126,7 +130,7 @@ def _progress_stage(tool: ToolSpec) -> str:
 		return "searching"
 	if any(x in n for x in ("approve", "reject", "workflow")):
 		return "running_workflow"
-	if any(x in n for x in ("report", "summary", "analytics")):
+	if any(x in n for x in ("report", "summary", "analytics", "status_brief", "company_status")):
 		return "generating_report"
 	if tool.category == "write" and any(x in n for x in ("create", "insert")):
 		return "creating_document"

@@ -121,10 +121,16 @@ def load_mcp_tools() -> list[ToolSpec]:
 	rows = frappe.get_all(
 		"AI MCP Server",
 		filters={"enabled": 1},
-		fields=["name", "label", "transport", "url", "allowed_roles", "discovered_tools"],
+		fields=["name", "label", "transport", "url", "allowed_roles", "discovered_tools", "lifecycle_status"],
 	)
 	tools: list[ToolSpec] = []
 	for row in rows:
+		status = (row.get("lifecycle_status") or "Draft").strip()
+		# Only Enabled (or Testing for managers) load into tool router
+		if status not in ("Enabled", "Testing"):
+			continue
+		if status == "Testing" and "System Manager" not in _user_roles() and "Chat AI Manager" not in _user_roles():
+			continue
 		if not _role_allowed(row.get("allowed_roles")):
 			continue
 		discovered = _parse_discovered(row.get("discovered_tools"))

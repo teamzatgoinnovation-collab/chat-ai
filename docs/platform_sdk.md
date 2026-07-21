@@ -1,5 +1,7 @@
 # Platform SDK
 
+> Prefer the v0.2.5 docs: [plugin_sdk.md](plugin_sdk.md), [platform_architecture.md](platform_architecture.md).
+
 External apps extend Chat AI without forking core.
 
 ## Hook
@@ -10,6 +12,10 @@ chat_ai_plugins = [
     "other_app.ai.plugin.setup",
 ]
 ```
+
+## Folder auto-discovery (v0.2.5)
+
+Ship `<app>/chat_ai_plugin/` with `manifest.py` + optional `tools.py`. See [extension_guide.md](extension_guide.md).
 
 ## Registrar
 

@@ -6,5 +6,9 @@ from frappe.model.document import Document
 
 
 class AIRESTTool(Document):
-	pass
+	@frappe.whitelist()
+	def test_connection(self):
+		frappe.only_for(("System Manager", "Chat AI Manager"))
+		from chat_ai.core.tool_sources.health import test_rest_tool
 
+		return test_rest_tool(self.name, persist=True)

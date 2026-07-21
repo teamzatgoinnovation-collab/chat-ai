@@ -8,11 +8,21 @@ from frappe.utils import add_days, now_datetime, today
 
 def hourly():
 	_ping_provider()
+	_ping_connectors()
 
 
 def daily():
 	_rollup_usage()
 	_purge_old_conversations()
+
+
+def _ping_connectors():
+	try:
+		from chat_ai.core.tool_sources.health import check_all_connectors
+
+		check_all_connectors()
+	except Exception:
+		frappe.log_error(title="chat_ai connector health")
 
 
 def _ping_provider():

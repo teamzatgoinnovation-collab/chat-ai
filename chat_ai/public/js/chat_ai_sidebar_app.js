@@ -171,6 +171,8 @@ chat_ai.sidebar.AppOptions = {
 			streamMsgId: null,
 			streamStopped: false,
 			sessionPinned: false,
+			artifacts: [],
+			showArtifacts: false,
 		};
 	},
 	computed: {
@@ -487,6 +489,7 @@ chat_ai.sidebar.AppOptions = {
 			} catch (e) {
 				/* ignore */
 			}
+			await this.loadArtifacts();
 		},
 		async renameSession() {
 			if (!this.session) return;
@@ -532,6 +535,46 @@ chat_ai.sidebar.AppOptions = {
 			this.busy = false;
 			this.progress = "";
 			this.streamMsgId = null;
+			if (this.session) {
+				frappe.call({
+					method: "chat_ai.api.chat.cancel",
+					args: { session: this.session },
+				}).catch(() => {});
+			}
+		},
+		async loadArtifacts() {
+			if (!this.session) {
+				this.artifacts = [];
+				return;
+			}
+			try {
+				const r = await frappe.call({
+					method: "chat_ai.api.platform.chat_artifacts",
+					args: { session: this.session, limit: 40 },
+				});
+				const payload = r.message || {};
+				this.artifacts = (payload.ok && payload.data) || payload.data || [];
+				if (!Array.isArray(this.artifacts)) this.artifacts = [];
+			} catch (e) {
+				this.artifacts = [];
+			}
+		},
+		async openArtifact(name) {
+			try {
+				const r = await frappe.call({
+					method: "chat_ai.api.platform.get_artifact",
+					args: { name },
+				});
+				const payload = r.message || {};
+				const doc = (payload.ok && payload.data) || payload.data || {};
+				const body = doc.content || "";
+				frappe.msgprint({
+					title: doc.title || name,
+					message: `<pre class="cai-code">${frappe.utils.escape_html(String(body).slice(0, 8000))}</pre>`,
+				});
+			} catch (e) {
+				frappe.show_alert({ message: e.message || "Failed", indicator: "red" });
+			}
 		},
 		async setLanguage(code) {
 			this.language = code;
@@ -951,6 +994,7 @@ chat_ai.sidebar.AppOptions = {
 					});
 				}
 				await this.refreshSessions();
+				await this.loadArtifacts();
 			} catch (e) {
 				const idx = this.messages.findIndex((m) => m.id === this.streamMsgId);
 				if (idx >= 0) this.messages[idx].text = e.message || "Request failed";
@@ -989,10 +1033,45 @@ chat_ai.sidebar.AppOptions = {
 					this.streamMsgId = msg.id;
 				}
 				msg.text = (msg.text || "") + chunk;
+				msg._fromLegacyStream = true;
 				this.$nextTick(() => {
 					const box = this.$refs.messages;
 					if (box) box.scrollTop = box.scrollHeight;
 				});
+			});
+			frappe.realtime.on("chat_ai:event", (evt) => {
+				if (!evt) return;
+				if (evt.session && this.session && evt.session !== this.session) return;
+				const t = evt.type || "";
+				const d = evt.data || {};
+				if (t === "planning" || t === "thinking") {
+					this.progress = d.detail || t;
+				} else if (t === "tool_started" || t === "tool_progress") {
+					this.progress = d.detail || d.tool || t;
+				} else if (t === "assistant_message") {
+					if (this.streamStopped) return;
+					if (d.done) {
+						this.progress = "";
+						return;
+					}
+					const chunk = d.chunk || "";
+					if (!chunk) return;
+					let msg = this.messages.find((m) => m.id === this.streamMsgId);
+					if (!msg) {
+						msg = this.pushMessage("assistant", { text: "", content_json: { blocks: [] } });
+						this.streamMsgId = msg.id;
+					}
+					/* Prefer legacy stream when both fire; only append if empty stream path */
+					if (!(msg.text || "").length) msg.text = chunk;
+					else if (!msg._fromLegacyStream) msg.text += chunk;
+				} else if (t === "artifact_created") {
+					this.loadArtifacts();
+				} else if (t === "done") {
+					this.progress = "";
+					this.loadArtifacts();
+				} else if (t === "error") {
+					this.progress = d.message || "Error";
+				}
 			});
 		},
 	},
@@ -1027,9 +1106,28 @@ chat_ai.sidebar.AppOptions = {
         <option v-for="l in languages" :key="l.code" :value="l.code">{{ l.native }}</option>
       </select>
       <button type="button" class="cai-icon-btn" :title="ui.sessions" @click="showSessions = !showSessions; refreshSessions()">☰</button>
+      <button type="button" class="cai-icon-btn" title="Artifacts" @click="showArtifacts = !showArtifacts; loadArtifacts()">▣</button>
       <button type="button" class="cai-icon-btn" :title="ui.newChat" @click="newSession">{{ ui.newChat }}</button>
       <button type="button" class="cai-icon-btn" title="Close" @click="toggle(false)">×</button>
     </header>
+
+    <div v-if="showArtifacts" class="cai-session-rail cai-artifact-rail">
+      <div class="cai-session-actions">
+        <strong>Artifacts</strong>
+        <button type="button" class="cai-icon-btn" @click="loadArtifacts">↻</button>
+      </div>
+      <button
+        v-for="a in artifacts"
+        :key="a.name"
+        type="button"
+        class="cai-session-item"
+        @click="openArtifact(a.name)"
+      >
+        <span>{{ a.title || a.artifact_type }}</span>
+        <small>{{ a.artifact_type }}</small>
+      </button>
+      <p v-if="!artifacts.length" class="cai-brand-sub">No artifacts yet</p>
+    </div>
 
     <div v-if="showSessions" class="cai-session-rail">
       <input class="cai-session-search" v-model="sessionQuery" :placeholder="ui.searchSessions" @input="refreshSessions" />

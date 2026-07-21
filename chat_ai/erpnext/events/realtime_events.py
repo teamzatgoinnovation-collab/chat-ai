@@ -1,8 +1,10 @@
-"""Realtime progress / stream helpers."""
+"""Realtime progress / stream helpers + chat_ai:event dual publish."""
 
 from __future__ import annotations
 
 import frappe
+
+from chat_ai.core.events import EventPublisher, map_progress_stage
 
 STAGE_LABELS = {
 	"searching": "Searching...",
@@ -17,6 +19,15 @@ STAGE_LABELS = {
 }
 
 
+def _publisher(session: str) -> EventPublisher:
+	enabled = True
+	try:
+		enabled = bool(frappe.db.get_single_value("Chat AI Settings", "enable_event_stream") or 1)
+	except Exception:
+		enabled = True
+	return EventPublisher(session, enabled=enabled)
+
+
 def publish_progress(session: str, stage: str, detail: str = "", tool: str = ""):
 	label = STAGE_LABELS.get(stage, STAGE_LABELS["working"])
 	frappe.publish_realtime(
@@ -24,6 +35,16 @@ def publish_progress(session: str, stage: str, detail: str = "", tool: str = "")
 		{"session": session, "stage": stage, "label": label, "detail": detail, "tool": tool},
 		user=frappe.session.user,
 	)
+	pub = _publisher(session)
+	etype = map_progress_stage(stage)
+	if etype == "planning":
+		pub.planning(detail or label)
+	elif etype == "done":
+		pub.done(detail or label)
+	elif etype == "thinking":
+		pub.thinking(detail or label)
+	else:
+		pub.tool_progress(tool or detail or "", detail or label, stage)
 
 
 def publish_stream(session: str, chunk: str, done: bool = False):
@@ -32,6 +53,7 @@ def publish_stream(session: str, chunk: str, done: bool = False):
 		{"session": session, "chunk": chunk, "done": done},
 		user=frappe.session.user,
 	)
+	_publisher(session).assistant_message(chunk or "", done=done)
 
 
 def publish_notify(title: str, message: str, user: str | None = None):
@@ -40,3 +62,7 @@ def publish_notify(title: str, message: str, user: str | None = None):
 		{"title": title, "message": message},
 		user=user or frappe.session.user,
 	)
+
+
+def publish_event(session: str, event_type: str, data: dict | None = None):
+	return _publisher(session).emit(event_type, data or {})

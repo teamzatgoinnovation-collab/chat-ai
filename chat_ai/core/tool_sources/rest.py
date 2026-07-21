@@ -144,10 +144,16 @@ def load_rest_tools() -> list[ToolSpec]:
 			"json_schema",
 			"allowed_roles",
 			"category",
+			"lifecycle_status",
 		],
 	)
 	tools: list[ToolSpec] = []
 	for row in rows:
+		status = (row.get("lifecycle_status") or "Enabled").strip()
+		if status and status not in ("Enabled", "Testing"):
+			continue
+		if status == "Testing" and "System Manager" not in _user_roles() and "Chat AI Manager" not in _user_roles():
+			continue
 		if not _role_allowed(row.get("allowed_roles")):
 			continue
 		name = row.get("tool_name") or row.get("name")

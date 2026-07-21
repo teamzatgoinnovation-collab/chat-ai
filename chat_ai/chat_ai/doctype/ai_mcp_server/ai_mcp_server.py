@@ -14,3 +14,10 @@ class AIMCPServer(Document):
 
 		tools = refresh_discovered_tools(self.name)
 		return {"count": len(tools), "tools": tools}
+
+	@frappe.whitelist()
+	def test_connection(self):
+		frappe.only_for(("System Manager", "Chat AI Manager"))
+		from chat_ai.core.tool_sources.health import test_mcp_server
+
+		return test_mcp_server(self.name, persist=True)

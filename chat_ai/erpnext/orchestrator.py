@@ -27,10 +27,20 @@ from chat_ai.core.tool_router.spec import ConfirmationPolicy, ToolSpec
 from chat_ai.erpnext.confirmation_tokens import consume_token, issue_token
 from chat_ai.core.approval import is_plan_approval_text
 from chat_ai.erpnext.context import build_context_stack
-from chat_ai.core.assistant_mode import resolve_assistant_mode
+from chat_ai.core.assistant_mode import (
+	is_company_status_intent,
+	resolve_assistant_mode,
+	status_candidate_skills,
+)
 from chat_ai.core.tool_enrichment import enrich_tool_args
+from chat_ai.core.artifacts import ArtifactBuilder, persist_artifacts
+from chat_ai.core.tool_pipeline import clear_cancel
 from chat_ai.erpnext.events.realtime_events import publish_progress, publish_stream
 from chat_ai.erpnext.settings import get_settings_dict
+from chat_ai.plugin.loader import load_all as load_plugins
+from chat_ai.core.prompts.framework import PromptBundleRegistry
+from chat_ai.erpnext.permissions.engine import PermissionEngine
+from chat_ai.erpnext.jobs.turn_jobs import should_run_background, enqueue_turn
 
 
 def _skills_root() -> str:
@@ -67,15 +77,27 @@ def get_prompt_text(settings: dict, skill_prompts: list[str] | None = None) -> s
 	text += f"\n\nActive assistant mode: {mode}."
 	# Mode-specific addenda (v3+)
 	mode_key = _MODE_ADDENDA.get(mode)
+	mode_text = ""
 	if mode_key and version in ("v3", "v4"):
 		mode_file = base_dir / "modes" / f"{mode_key}.md"
 		if mode_file.exists():
-			text += "\n\n" + mode_file.read_text()
+			mode_text = mode_file.read_text()
+			text += "\n\n" + mode_text
+	if is_company_status_intent(settings.get("_user_message") or ""):
+		text += (
+			"\n\nFor company status / business overview questions, call `company_status_brief` first, "
+			"then narrate each section with the Company assumption. Never invent AR/AP/stock figures."
+		)
 	lang = settings.get("_language") or settings.get("default_language") or "en"
 	text += "\n\n" + language_prompt(lang)
-	for p in skill_prompts or []:
-		if p:
-			text += "\n\n" + p
+	# Plugin prompt inheritance
+	plugin_extra = PromptBundleRegistry.compose("", skill_prompts=skill_prompts)
+	if plugin_extra.strip():
+		text += "\n\n" + plugin_extra
+	else:
+		for p in skill_prompts or []:
+			if p:
+				text += "\n\n" + p
 	return text
 
 
@@ -157,8 +179,38 @@ def run_turn(
 	pending_args: dict | None = None,
 	plan_confirmed: bool = False,
 	confirmation_token: str | None = None,
+	execution_mode: str | None = None,
 ) -> dict:
 	settings = get_settings_dict()
+	# Reload plugins every turn (cold worker + discovery)
+	try:
+		load_plugins(settings)
+	except Exception:
+		pass
+
+	# Background enqueue (avoid re-enqueue when already in worker)
+	if execution_mode != "_worker" and should_run_background(user_message, settings, execution_mode):
+		enqueue_turn(
+			session_name=session_name,
+			user_message=user_message,
+			client_context=client_context,
+			command=command,
+			confirmed=confirmed,
+			pending_tool=pending_tool,
+			pending_args=pending_args,
+			plan_confirmed=plan_confirmed,
+			confirmation_token=confirmation_token,
+			execution_mode="_worker",
+		)
+		return {
+			"session": session_name,
+			"queued": True,
+			"execution_mode": "background",
+			"content": "Working on this in the background… I'll notify when ready.",
+			"assistant_mode": resolve_assistant_mode(client_context, user_message),
+		}
+
+	clear_cancel(session_name)
 	session = frappe.get_doc("AI Chat Session", session_name)
 	if session.user != frappe.session.user and "System Manager" not in frappe.get_roles():
 		frappe.throw("Not permitted", frappe.PermissionError)
@@ -171,6 +223,7 @@ def run_turn(
 		getattr(session, "assistant_mode", None),
 	)
 	settings["_assistant_mode"] = resolved_mode
+	settings["_user_message"] = user_message or ""
 	if session.assistant_mode != resolved_mode:
 		session.assistant_mode = resolved_mode
 	settings["_language"] = normalize_language(
@@ -199,10 +252,14 @@ def run_turn(
 			"customer": "crm",
 			"invoice": "accounts",
 			"stock": "inventory",
+			"status": "analytics",
 		}.get(command)
 		candidate_override = [cmd_skill, "core"] if cmd_skill and cmd_skill in available else None
 	else:
 		candidate_override = None
+
+	if is_company_status_intent(user_message) or (command or "").lstrip("/") == "status":
+		candidate_override = status_candidate_skills(available)
 
 	publish_progress(session_name, "planning")
 
@@ -225,14 +282,19 @@ def run_turn(
 			plan_confirmed = True
 			msg = stored.get("original_message") or msg
 
+	_router_kwargs = dict(
+		policy=policy,
+		limits=limits,
+		progress=lambda s, d="": publish_progress(session_name, s, d),
+		session=session_name,
+		timeout_seconds=int(settings.get("tool_timeout_seconds") or 60),
+		max_retries=int(settings.get("tool_max_retries") or settings.get("max_retries") or 0),
+		permission_engine=PermissionEngine,
+	)
+
 	if confirmed and pending_tool:
 		tools = collect_tools(available, settings=settings)
-		router = ToolRouter(
-			tools,
-			policy=policy,
-			limits=limits,
-			progress=lambda s, d="": publish_progress(session_name, s, d),
-		)
+		router = ToolRouter(tools, **_router_kwargs)
 		tool_spec = router.get(pending_tool)
 		enriched = enrich_tool_args(tool_spec, pending_args or {}, context)
 		result = router.run(
@@ -266,6 +328,12 @@ def run_turn(
 		available_skills=available,
 		available_tool_names=[t.name for t in probe_tools],
 	)
+
+	if is_company_status_intent(user_message):
+		plan.is_simple_question = False
+		if "company_status_brief" not in (plan.candidate_tools or []):
+			plan.candidate_tools = list(plan.candidate_tools or []) + ["company_status_brief", "dashboard_summary"]
+		plan.candidate_skills = status_candidate_skills(available)
 
 	if plan.needs_clarification:
 		resp = clarification(plan.clarification_question or "Could you provide more details?")
@@ -301,6 +369,8 @@ def run_turn(
 
 	candidates = candidate_override or plan.candidate_skills or ["core"]
 	tool_shortlist = approved_candidate_tools or plan.candidate_tools or None
+	if is_company_status_intent(user_message):
+		tool_shortlist = list(set(tool_shortlist or []) | {"company_status_brief", "dashboard_summary"})
 	if approved_plan:
 		msg = msg + "\n\n[Approved plan]\n" + "\n".join(f"- {s}" for s in approved_plan)
 	skills = [s for s in list_skills() if s.name in candidates]
@@ -310,12 +380,7 @@ def run_turn(
 
 	publish_progress(session_name, "routing")
 	tools = collect_tools(candidates, candidate_tools=tool_shortlist, settings=settings)
-	router = ToolRouter(
-		tools,
-		policy=policy,
-		limits=limits,
-		progress=lambda s, d="": publish_progress(session_name, s, d),
-	)
+	router = ToolRouter(tools, **_router_kwargs)
 	risk_level = plan.risk_level or "medium"
 
 	if not settings.get("enable_tool_calling", 1) or not provider.capabilities.tool_calling:
@@ -370,9 +435,22 @@ def run_turn(
 			if plan.assumptions and plan.assumptions[0] not in md:
 				md = "\n".join(plan.assumptions[:3]) + "\n\n" + md
 			resp = AssistantResponse(markdown=md)
+			# Attach blocks from prior tool results if any
+			if tool_results:
+				built = build_from_tool_results(tool_results)
+				resp.blocks = built.blocks
 			publish_progress(session_name, "done")
 			publish_stream(session_name, "", done=True)
-			return _persist(session, memory, user_message, resp, settings, tokens=(total_in, total_out), model=result.model)
+			return _persist(
+				session,
+				memory,
+				user_message,
+				resp,
+				settings,
+				tokens=(total_in, total_out),
+				model=result.model,
+				tool_results=tool_results,
+			)
 
 		messages.append(
 			LLMMessage(role="assistant", content=result.content or "", tool_calls=result.tool_calls)
@@ -414,7 +492,15 @@ def run_turn(
 		resp.markdown = "\n".join(plan.assumptions[:3]) + "\n\n" + resp.markdown
 	publish_progress(session_name, "done")
 	publish_stream(session_name, resp.markdown, done=True)
-	return _persist(session, memory, user_message, resp, settings, tokens=(total_in, total_out))
+	return _persist(
+		session,
+		memory,
+		user_message,
+		resp,
+		settings,
+		tokens=(total_in, total_out),
+		tool_results=tool_results,
+	)
 
 
 def _stream_final_answer(
@@ -512,7 +598,7 @@ def _load_memory(session_name: str) -> ConversationMemory:
 	return mem
 
 
-def _persist(session, memory, user_message, resp: AssistantResponse, settings, tokens=(0, 0), model="", error=False):
+def _persist(session, memory, user_message, resp: AssistantResponse, settings, tokens=(0, 0), model="", error=False, tool_results=None):
 	start = time.time()
 	# user message
 	frappe.get_doc(
@@ -523,6 +609,28 @@ def _persist(session, memory, user_message, resp: AssistantResponse, settings, t
 			"content": user_message,
 		}
 	).insert(ignore_permissions=True)
+
+	# Enrich blocks from company status / tool results
+	if tool_results:
+		try:
+			from chat_ai.core.response import ContentBlock
+
+			arts = ArtifactBuilder.from_tool_results(tool_results)
+			for art in arts:
+				if art.artifact_type == "table" and art.content:
+					resp.blocks.append(ContentBlock(type="table", data=art.content))
+				elif art.artifact_type in ("report", "markdown") and isinstance(art.content, dict):
+					md = art.content.get("markdown") or ""
+					if md and md not in (resp.markdown or ""):
+						resp.markdown = (md + "\n\n" + (resp.markdown or "")).strip()
+				elif art.artifact_type == "checklist":
+					resp.blocks.append(
+						ContentBlock(type="plan", data={"steps": (art.content or {}).get("items") or []})
+					)
+				elif art.artifact_type == "chart" and art.content:
+					resp.blocks.append(ContentBlock(type="chart", data=art.content))
+		except Exception:
+			pass
 
 	cost = _cost(settings, tokens[0], tokens[1])
 	assistant = frappe.get_doc(
@@ -544,6 +652,24 @@ def _persist(session, memory, user_message, resp: AssistantResponse, settings, t
 	)
 	assistant.insert(ignore_permissions=True)
 
+	artifact_ids = []
+	try:
+		from chat_ai.core.events import EventPublisher
+
+		pub = EventPublisher(session.name, enabled=bool(settings.get("enable_event_stream", 1)))
+		arts = []
+		if tool_results:
+			arts.extend(ArtifactBuilder.from_tool_results(tool_results))
+		arts.extend(ArtifactBuilder.from_content_blocks(resp.blocks))
+		artifact_ids = persist_artifacts(
+			session=session.name,
+			message=assistant.name,
+			artifacts=arts,
+			publisher=pub,
+		)
+	except Exception:
+		frappe.log_error(title="chat_ai artifact persist")
+
 	session.last_message_at = now_datetime()
 	if not session.title or session.title == "New chat":
 		session.title = (user_message or "Chat")[:60]
@@ -558,6 +684,7 @@ def _persist(session, memory, user_message, resp: AssistantResponse, settings, t
 		"content": resp.markdown,
 		"content_json": resp.to_content_json(),
 		"assistant_mode": settings.get("_assistant_mode") or session.assistant_mode or "ERP Assistant",
+		"artifacts": artifact_ids,
 		"needs_confirmation": resp.needs_confirmation,
 		"confirmation_message": resp.confirmation_message,
 		"pending_tool": resp.pending_tool,

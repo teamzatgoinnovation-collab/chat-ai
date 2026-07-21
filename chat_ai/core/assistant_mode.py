@@ -20,6 +20,23 @@ _VALID_MODES = frozenset(
 	}
 )
 
+_STATUS_KW = (
+	"company status",
+	"business overview",
+	"how are we doing",
+	"health check",
+	"business health",
+	"cash position",
+	"stock low",
+	"low stock",
+	"creditors",
+	"debtors",
+	"receivables",
+	"payables",
+	"company snapshot",
+	"status snapshot",
+)
+
 _ANALYTICS_KW = (
 	"report",
 	"summary",
@@ -30,7 +47,8 @@ _ANALYTICS_KW = (
 	"trend",
 	"metrics",
 	"statistics",
-)
+) + _STATUS_KW
+
 _DEVELOPER_KW = (
 	"api",
 	"doctype meta",
@@ -58,6 +76,16 @@ _ADMIN_KW = (
 	"module def",
 )
 
+_STATUS_SKILLS = (
+	"analytics",
+	"accounts",
+	"inventory",
+	"sales",
+	"purchase",
+	"crm",
+	"projects",
+)
+
 
 def normalize_mode(mode: str | None) -> str:
 	"""Map legacy / unknown modes to a known assistant mode."""
@@ -69,6 +97,28 @@ def normalize_mode(mode: str | None) -> str:
 	return MODE_ERP
 
 
+def is_company_status_intent(user_message: str | None = None) -> bool:
+	msg = (user_message or "").strip().lower()
+	if not msg:
+		return False
+	if _has_any(msg, _STATUS_KW):
+		return True
+	# Soft match: "what is my company" / "our company status"
+	if "company" in msg and any(w in msg for w in ("status", "health", "overview", "doing", "snapshot")):
+		return True
+	return False
+
+
+def status_candidate_skills(available: list[str] | None = None) -> list[str]:
+	avail = set(available or [])
+	out = [s for s in _STATUS_SKILLS if not avail or s in avail]
+	if "analytics" not in out:
+		out.insert(0, "analytics")
+	if "core" not in out:
+		out.append("core")
+	return out
+
+
 def resolve_assistant_mode(
 	client_context: dict | None = None,
 	user_message: str | None = None,
@@ -78,14 +128,18 @@ def resolve_assistant_mode(
 	Decide assistant mode for this turn.
 
 	Priority:
-	1. Form / current document context → Document Assistant
-	2. Analytics keywords (or List + analytics intent) → Analytics Assistant
-	3. Developer keywords → Developer Assistant
-	4. Admin/permissions keywords → Admin Assistant
-	5. Else → ERP Assistant
+	1. Company status intent → Analytics Assistant (even with form open)
+	2. Form / current document context → Document Assistant
+	3. Analytics keywords (or List + analytics intent) → Analytics Assistant
+	4. Developer keywords → Developer Assistant
+	5. Admin/permissions keywords → Admin Assistant
+	6. Else → ERP Assistant
 	"""
 	ctx = client_context or {}
 	msg = (user_message or "").strip().lower()
+
+	if is_company_status_intent(user_message):
+		return MODE_ANALYTICS
 
 	if _has_form_context(ctx):
 		return MODE_DOCUMENT

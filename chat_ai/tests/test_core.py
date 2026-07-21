@@ -221,5 +221,119 @@ class TestI18n(unittest.TestCase):
 		self.assertIn("Malayalam", language_prompt("ml"))
 
 
+class TestPluginManifest(unittest.TestCase):
+	def test_validate(self):
+		from chat_ai.plugin.manifest import validate_manifest
+
+		m = validate_manifest({"name": "x", "version": "1.0.0"}, app="demo")
+		self.assertEqual(m.name, "x")
+		self.assertEqual(m.app, "demo")
+
+
+class TestArtifacts(unittest.TestCase):
+	def test_status_brief_builder(self):
+		from chat_ai.core.artifacts import ArtifactBuilder
+
+		arts = ArtifactBuilder.from_tool_results(
+			[
+				{
+					"ok": True,
+					"tool": "company_status_brief",
+					"data": {
+						"_artifact_sections": True,
+						"company": "Acme",
+						"summary_md": "# Status",
+						"sections": [
+							{
+								"key": "stock",
+								"title": "Low Stock",
+								"table": {"headers": ["Item"], "rows": [["A"]]},
+							}
+						],
+						"actions": ["Reorder A"],
+					},
+				}
+			]
+		)
+		types = {a.artifact_type for a in arts}
+		self.assertIn("report", types)
+		self.assertIn("table", types)
+		self.assertIn("checklist", types)
+
+
+class TestEvents(unittest.TestCase):
+	def test_chat_event_dict(self):
+		from chat_ai.core.events import ChatEvent
+
+		e = ChatEvent(session="S", type="planning", data={"detail": "x"})
+		d = e.to_dict()
+		self.assertEqual(d["type"], "planning")
+		self.assertEqual(d["session"], "S")
+		self.assertTrue(d["ts"])
+
+
+class TestPromptRegistry(unittest.TestCase):
+	def test_compose(self):
+		from chat_ai.core.prompts.framework import PromptBundleRegistry
+
+		PromptBundleRegistry.clear()
+		PromptBundleRegistry.register_fragment("p", name="a", text="PLUGIN", priority=10)
+		out = PromptBundleRegistry.compose("BASE", skill_prompts=["SKILL"])
+		self.assertIn("BASE", out)
+		self.assertIn("PLUGIN", out)
+		self.assertIn("SKILL", out)
+
+
+class TestPermissionEngine(unittest.TestCase):
+	def test_rule_narrows(self):
+		from chat_ai.erpnext.permissions.engine import PermissionDecision, PermissionEngine
+		from chat_ai.core.tool_router.spec import CATEGORY_READ, ToolSpec
+
+		PermissionEngine.clear_rules()
+		PermissionEngine.register_rule(
+			"deny_all",
+			lambda tool, args, ctx: PermissionDecision(allowed=False, reason="nope"),
+			priority=1,
+		)
+		tool = ToolSpec(name="t", description="x", category=CATEGORY_READ)
+		d = PermissionEngine.evaluate(tool, {}, {})
+		self.assertFalse(d.allowed)
+		PermissionEngine.clear_rules()
+
+
+class TestAssistantStatusIntent(unittest.TestCase):
+	def test_company_status(self):
+		from chat_ai.core.assistant_mode import (
+			MODE_ANALYTICS,
+			is_company_status_intent,
+			resolve_assistant_mode,
+		)
+
+		self.assertTrue(is_company_status_intent("what is my company status?"))
+		self.assertEqual(resolve_assistant_mode({}, "company health check"), MODE_ANALYTICS)
+
+
+class TestToolPipeline(unittest.TestCase):
+	def test_pipeline_run(self):
+		from chat_ai.core.tool_pipeline import ToolPipeline
+		from chat_ai.core.tool_router.spec import CATEGORY_READ, ToolSpec
+
+		tool = ToolSpec(
+			name="ping",
+			description="x",
+			category=CATEGORY_READ,
+			handler=lambda: {"ok": True},
+		)
+		pipe = ToolPipeline({"ping": tool}, max_retries=0)
+		r = pipe.run(
+			"ping",
+			{},
+			category_allowed_fn=lambda t: True,
+			needs_confirmation_fn=lambda t, a, rl: False,
+			progress_stage_fn=lambda t: "reading_erp",
+		)
+		self.assertTrue(r.ok)
+
+
 if __name__ == "__main__":
 	unittest.main()

@@ -37,11 +37,21 @@ def _bootstrap():
 	_sanitize_provider_settings()
 	_ensure_desk_entry()
 	_sync_public_assets()
+	_bootstrap_connectors()
 	_load_plugins()
 	try:
 		frappe.clear_cache()
 	except Exception:
 		frappe.log_error(title="chat_ai clear_cache")
+
+
+def _bootstrap_connectors():
+	try:
+		from chat_ai.core.tool_sources.health import bootstrap_lifecycle_statuses
+
+		bootstrap_lifecycle_statuses()
+	except Exception:
+		frappe.log_error(title="chat_ai connector bootstrap")
 
 
 def _ensure_module_map():

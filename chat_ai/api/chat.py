@@ -29,6 +29,7 @@ def send(
 	pending_args=None,
 	plan_confirmed=None,
 	confirmation_token=None,
+	execution_mode=None,
 ):
 	_ensure_user()
 	if isinstance(client_context, str):
@@ -49,11 +50,22 @@ def send(
 			pending_args=pending_args or {},
 			plan_confirmed=frappe.utils.cint(plan_confirmed),
 			confirmation_token=confirmation_token,
+			execution_mode=execution_mode,
 		)
 		return ok(data)
 	except Exception as exc:
 		frappe.log_error(title="chat_ai.send")
 		return fail(str(exc))
+
+
+@frappe.whitelist()
+def cancel(session=None):
+	_ensure_user()
+	_assert_session_access(session)
+	from chat_ai.core.tool_pipeline import request_cancel
+
+	request_cancel(session)
+	return ok({"cancelled": True})
 
 
 @frappe.whitelist()

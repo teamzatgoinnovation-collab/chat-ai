@@ -247,10 +247,16 @@ def load_integration_tools() -> list[ToolSpec]:
 			"base_url",
 			"allowed_roles",
 			"workspace_id",
+			"lifecycle_status",
 		],
 	)
 	tools: list[ToolSpec] = []
 	for row in rows:
+		status = (row.get("lifecycle_status") or "Draft").strip()
+		if status not in ("Enabled", "Testing"):
+			continue
+		if status == "Testing" and "System Manager" not in _user_roles() and "Chat AI Manager" not in _user_roles():
+			continue
 		if not _role_allowed(row.get("allowed_roles")):
 			continue
 		service = row.get("service") or "Custom"

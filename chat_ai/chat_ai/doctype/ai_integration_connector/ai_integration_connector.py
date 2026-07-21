@@ -6,5 +6,9 @@ from frappe.model.document import Document
 
 
 class AIIntegrationConnector(Document):
-	pass
+	@frappe.whitelist()
+	def test_connection(self):
+		frappe.only_for(("System Manager", "Chat AI Manager"))
+		from chat_ai.core.tool_sources.health import test_integration
 
+		return test_integration(self.name, persist=True)
