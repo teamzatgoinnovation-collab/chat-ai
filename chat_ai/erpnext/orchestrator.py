@@ -35,7 +35,7 @@ from chat_ai.core.assistant_mode import (
 from chat_ai.core.tool_enrichment import enrich_tool_args
 from chat_ai.core.artifacts import ArtifactBuilder, persist_artifacts
 from chat_ai.core.tool_pipeline import clear_cancel
-from chat_ai.erpnext.events.realtime_events import publish_progress, publish_stream
+from chat_ai.erpnext.events.realtime_events import publish_progress, publish_stream, publish_typed_stream
 from chat_ai.erpnext.settings import get_settings_dict
 from chat_ai.plugin.loader import load_all as load_plugins
 from chat_ai.core.prompts.framework import PromptBundleRegistry
@@ -491,7 +491,10 @@ def run_turn(
 	if plan.assumptions:
 		resp.markdown = "\n".join(plan.assumptions[:3]) + "\n\n" + resp.markdown
 	publish_progress(session_name, "done")
-	publish_stream(session_name, resp.markdown, done=True)
+	if settings.get("enable_streaming", 1):
+		publish_typed_stream(session_name, resp.markdown or "", chunk_size=5)
+	else:
+		publish_stream(session_name, resp.markdown or "", done=True)
 	return _persist(
 		session,
 		memory,
@@ -515,14 +518,10 @@ def _stream_final_answer(
 ) -> str:
 	"""Stream final assistant text when enabled; otherwise return fallback content."""
 	# When the non-stream chat already returned content without tool_calls, publish it
-	# and optionally re-stream via chat_stream only if we have no content yet.
+	# in typing-sized chunks for Desk UX.
 	if already_content:
 		if settings.get("enable_streaming", 1):
-			# Publish incrementally for UX (provider already completed; chunk for client)
-			text = already_content
-			step = max(1, len(text) // 24) if text else 1
-			for i in range(0, len(text), step):
-				publish_stream(session_name, text[i : i + step], done=False)
+			publish_typed_stream(session_name, already_content, chunk_size=5)
 		return already_content
 	if not settings.get("enable_streaming", 1):
 		return fallback

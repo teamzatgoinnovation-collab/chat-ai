@@ -173,6 +173,10 @@ chat_ai.sidebar.AppOptions = {
 			sessionPinned: false,
 			artifacts: [],
 			showArtifacts: false,
+			_typeQueue: "",
+			_typeTimer: null,
+			_typeMsgId: null,
+			_typePendingMeta: null,
 		};
 	},
 	computed: {
@@ -534,6 +538,7 @@ chat_ai.sidebar.AppOptions = {
 			this.streamStopped = true;
 			this.busy = false;
 			this.progress = "";
+			this.clearTypewriter(true);
 			this.streamMsgId = null;
 			if (this.session) {
 				frappe.call({
@@ -541,6 +546,112 @@ chat_ai.sidebar.AppOptions = {
 					args: { session: this.session },
 				}).catch(() => {});
 			}
+		},
+		clearTypewriter(flush) {
+			if (this._typeTimer) {
+				clearTimeout(this._typeTimer);
+				this._typeTimer = null;
+			}
+			const msg = this.messages.find((m) => m.id === this._typeMsgId);
+			if (msg) {
+				if (flush && this._typeQueue) {
+					msg.text = (msg.text || "") + this._typeQueue;
+				}
+				msg.typing = false;
+			}
+			this._typeQueue = "";
+			this._typeMsgId = null;
+			const meta = this._typePendingMeta;
+			this._typePendingMeta = null;
+			if (meta && msg) this.applyMessageMeta(msg, meta);
+		},
+		applyMessageMeta(msg, meta) {
+			if (!msg || !meta) return;
+			if (meta.blocks) msg.blocks = meta.blocks;
+			if (meta.needs_confirmation != null) msg.needs_confirmation = !!meta.needs_confirmation;
+			if (meta.needs_plan_approval != null) msg.needs_plan_approval = !!meta.needs_plan_approval;
+			if (meta.pending_plan) msg.pending_plan = meta.pending_plan;
+			if (meta.pending_assumptions) msg.pending_assumptions = meta.pending_assumptions;
+			if (meta.confirmation_token) msg.confirmation_token = meta.confirmation_token;
+			if (msg.needs_confirmation && meta.pending) this.pending = meta.pending;
+			else if (msg.needs_plan_approval && meta.pending) this.pending = meta.pending;
+			if (meta.speak && this.autoSpeak && this.enableVoiceOut && msg.text) this.speak(msg);
+		},
+		enqueueType(msgId, chunk) {
+			if (!chunk || this.streamStopped) return;
+			this._typeMsgId = msgId;
+			this._typeQueue += chunk;
+			const msg = this.messages.find((m) => m.id === msgId);
+			if (msg) msg.typing = true;
+			if (!this._typeTimer) this.drainTypewriter();
+		},
+		drainTypewriter() {
+			if (this.streamStopped) {
+				this.clearTypewriter(false);
+				return;
+			}
+			if (!this._typeQueue) {
+				this._typeTimer = null;
+				const msg = this.messages.find((m) => m.id === this._typeMsgId);
+				if (msg) msg.typing = false;
+				const meta = this._typePendingMeta;
+				if (meta && msg) {
+					this._typePendingMeta = null;
+					this.applyMessageMeta(msg, meta);
+				}
+				return;
+			}
+			/* Type a few characters at a time for readable pace */
+			const n = this._typeQueue.length > 80 ? 4 : this._typeQueue.length > 20 ? 3 : 2;
+			const take = this._typeQueue.slice(0, n);
+			this._typeQueue = this._typeQueue.slice(n);
+			const msg = this.messages.find((m) => m.id === this._typeMsgId);
+			if (msg) {
+				msg.text = (msg.text || "") + take;
+				msg.typing = true;
+			}
+			this.$nextTick(() => {
+				const box = this.$refs.messages;
+				if (box) box.scrollTop = box.scrollHeight;
+			});
+			const delay = take.includes("\n") ? 28 : 14;
+			this._typeTimer = setTimeout(() => this.drainTypewriter(), delay);
+		},
+		typeToFull(msgId, fullText, meta) {
+			const msg = this.messages.find((m) => m.id === msgId);
+			if (!msg) return Promise.resolve();
+			const current = msg.text || "";
+			const target = fullText || "";
+			this._typePendingMeta = meta || null;
+			if (!target) {
+				this.applyMessageMeta(msg, meta);
+				msg.typing = false;
+				return Promise.resolve();
+			}
+			if (target.startsWith(current)) {
+				const rest = target.slice(current.length);
+				if (!rest) {
+					this.applyMessageMeta(msg, meta);
+					msg.typing = false;
+					return Promise.resolve();
+				}
+				this.enqueueType(msgId, rest);
+			} else {
+				/* Replace path: retype from empty for typing style */
+				msg.text = "";
+				this._typeQueue = "";
+				this.enqueueType(msgId, target);
+			}
+			return new Promise((resolve) => {
+				const wait = () => {
+					if (!this._typeQueue && !this._typeTimer) {
+						resolve();
+						return;
+					}
+					setTimeout(wait, 40);
+				};
+				wait();
+			});
 		},
 		async loadArtifacts() {
 			if (!this.session) {
@@ -963,34 +1074,41 @@ chat_ai.sidebar.AppOptions = {
 				};
 				if (idx >= 0) {
 					const msg = this.messages[idx];
-					msg.text = data.content || msg.text || "";
-					msg.blocks = cj.blocks || [];
-					msg.needs_confirmation = !!cj.needs_confirmation;
-					msg.needs_plan_approval = !!cj.needs_plan_approval;
-					msg.pending_plan = cj.pending_plan || [];
-					msg.pending_assumptions = cj.pending_assumptions || [];
-					msg.confirmation_token = cj.confirmation_token || data.confirmation_token || "";
-					if (msg.needs_confirmation) {
-						this.pending = {
-							kind: "tool",
-							tool: cj.pending_tool,
-							args: cj.pending_args,
-							token: msg.confirmation_token,
-						};
-					} else if (msg.needs_plan_approval) {
-						this.pending = {
-							kind: "plan",
-							plan: msg.pending_plan,
-							assumptions: msg.pending_assumptions,
-							token: msg.confirmation_token,
-						};
-					}
-					if (this.autoSpeak && this.enableVoiceOut && msg.text) this.speak(msg);
+					const pending =
+						cj.needs_confirmation
+							? {
+									kind: "tool",
+									tool: cj.pending_tool,
+									args: cj.pending_args,
+									token: cj.confirmation_token || data.confirmation_token || "",
+							  }
+							: cj.needs_plan_approval
+								? {
+										kind: "plan",
+										plan: cj.pending_plan || [],
+										assumptions: cj.pending_assumptions || [],
+										token: cj.confirmation_token || data.confirmation_token || "",
+								  }
+								: null;
+					await this.typeToFull(msg.id, data.content || msg.text || "", {
+						blocks: cj.blocks || [],
+						needs_confirmation: !!cj.needs_confirmation,
+						needs_plan_approval: !!cj.needs_plan_approval,
+						pending_plan: cj.pending_plan || [],
+						pending_assumptions: cj.pending_assumptions || [],
+						confirmation_token: cj.confirmation_token || data.confirmation_token || "",
+						pending,
+						speak: true,
+					});
 				} else {
-					this.pushMessage("assistant", {
-						text: data.content || "",
+					const m = this.pushMessage("assistant", {
+						text: "",
 						content_json: cj,
 						confirmation_token: data.confirmation_token,
+					});
+					await this.typeToFull(m.id, data.content || "", {
+						blocks: cj.blocks || [],
+						speak: true,
 					});
 				}
 				await this.refreshSessions();
@@ -1002,7 +1120,8 @@ chat_ai.sidebar.AppOptions = {
 			} finally {
 				this.busy = false;
 				this.progress = "";
-				this.streamMsgId = null;
+				/* keep streamMsgId until typing finishes if still queued */
+				if (!this._typeQueue && !this._typeTimer) this.streamMsgId = null;
 			}
 		},
 		bindRealtime() {
@@ -1032,12 +1151,8 @@ chat_ai.sidebar.AppOptions = {
 					msg = this.pushMessage("assistant", { text: "", content_json: { blocks: [] } });
 					this.streamMsgId = msg.id;
 				}
-				msg.text = (msg.text || "") + chunk;
 				msg._fromLegacyStream = true;
-				this.$nextTick(() => {
-					const box = this.$refs.messages;
-					if (box) box.scrollTop = box.scrollHeight;
-				});
+				this.enqueueType(msg.id, chunk);
 			});
 			frappe.realtime.on("chat_ai:event", (evt) => {
 				if (!evt) return;
@@ -1061,9 +1176,9 @@ chat_ai.sidebar.AppOptions = {
 						msg = this.pushMessage("assistant", { text: "", content_json: { blocks: [] } });
 						this.streamMsgId = msg.id;
 					}
-					/* Prefer legacy stream when both fire; only append if empty stream path */
-					if (!(msg.text || "").length) msg.text = chunk;
-					else if (!msg._fromLegacyStream) msg.text += chunk;
+					/* Prefer legacy stream when both fire */
+					if (msg._fromLegacyStream) return;
+					this.enqueueType(msg.id, chunk);
 				} else if (t === "artifact_created") {
 					this.loadArtifacts();
 				} else if (t === "done") {
@@ -1163,7 +1278,11 @@ chat_ai.sidebar.AppOptions = {
         :class="'cai-msg--' + msg.role"
       >
         <div class="cai-bubble">
-          <div class="cai-bubble-text" v-html="formatText(msg.text)"></div>
+          <div
+            class="cai-bubble-text"
+            :class="{ 'cai-bubble-text--typing': msg.typing }"
+            v-html="formatText(msg.text)"
+          ></div>
 
           <template v-for="(b, bi) in msg.blocks" :key="bi">
             <table v-if="b.type === 'table' && b.data" class="cai-table">

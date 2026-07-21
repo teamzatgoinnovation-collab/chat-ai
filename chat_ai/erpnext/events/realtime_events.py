@@ -56,6 +56,18 @@ def publish_stream(session: str, chunk: str, done: bool = False):
 	_publisher(session).assistant_message(chunk or "", done=done)
 
 
+def publish_typed_stream(session: str, text: str, *, chunk_size: int = 6):
+	"""Publish full text as small chunks so Desk can render typing-style."""
+	text = text or ""
+	if not text:
+		publish_stream(session, "", done=True)
+		return
+	step = max(1, int(chunk_size or 6))
+	for i in range(0, len(text), step):
+		publish_stream(session, text[i : i + step], done=False)
+	publish_stream(session, "", done=True)
+
+
 def publish_notify(title: str, message: str, user: str | None = None):
 	frappe.publish_realtime(
 		"chat_ai:notify",
