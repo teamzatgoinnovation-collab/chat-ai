@@ -114,8 +114,7 @@ def _ensure_settings():
 		# Touch defaults if brand-new empty single
 		if not doc.provider:
 			doc.provider = "OpenAI"
-		if not doc.default_model:
-			doc.default_model = "gpt-4o"
+		# Default Model stays blank unless the operator sets it
 		if not getattr(doc, "default_language", None):
 			doc.default_language = "en"
 		# Bootstrap v4 once for upgrades from v1–v3 (flag keyed to v0.2 release)
@@ -183,9 +182,6 @@ def _sanitize_provider_settings():
 			if not endpoint or "127.0.0.1" in endpoint or "localhost" in endpoint:
 				doc.api_endpoint = ""
 				changed = True
-			if not (doc.default_model or "").strip():
-				doc.default_model = "openrouter/auto"
-				changed = True
 
 		if provider == "Custom OpenAI-compatible" and (
 			not endpoint or "127.0.0.1" in endpoint or "localhost" in endpoint
@@ -194,8 +190,15 @@ def _sanitize_provider_settings():
 			doc.api_endpoint = ""
 			if key.startswith("sk-or-"):
 				doc.provider = "OpenRouter"
-				doc.default_model = doc.default_model or "openrouter/auto"
 			changed = True
+
+		# Once: clear placeholder Default Model so the field shows blank
+		if not frappe.db.get_global("chat_ai_blank_default_model"):
+			placeholder = (doc.default_model or "").strip()
+			if placeholder in ("gpt-4o", "openrouter/auto"):
+				doc.default_model = ""
+				changed = True
+			frappe.db.set_global("chat_ai_blank_default_model", "1")
 
 		if changed:
 			doc.save(ignore_permissions=True)

@@ -119,7 +119,7 @@
    "fieldname": "default_model",
    "fieldtype": "Data",
    "label": "Default Model",
-   "default": "gpt-4o"
+   "description": "Leave blank to use the provider's built-in default at runtime."
   },
   {
    "fieldname": "temperature",
