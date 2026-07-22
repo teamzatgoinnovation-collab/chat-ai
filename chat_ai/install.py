@@ -234,7 +234,7 @@ def _ensure_desk_entry():
 					"doctype": "Desktop Icon",
 					"label": label,
 					"app": "chat_ai",
-					"icon_type": "link",
+					"icon_type": "Link",
 					"link_type": "Workspace Sidebar",
 					"link_to": "AI Admin",
 					"icon": "solid-color",

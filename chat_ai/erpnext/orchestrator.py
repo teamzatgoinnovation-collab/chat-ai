@@ -190,6 +190,17 @@ def run_turn(
 	except Exception:
 		pass
 
+	# Ownership must be checked before any enqueue / mutation.
+	session = frappe.get_doc("AI Chat Session", session_name)
+	roles = frappe.get_roles()
+	if session.user != frappe.session.user and "System Manager" not in roles and "Chat AI Manager" not in roles:
+		frappe.throw("Not permitted", frappe.PermissionError)
+
+	# Clients cannot force scheduled enqueue; only managers/system may opt into background.
+	mode = (execution_mode or "immediate").lower()
+	if mode == "scheduled" and "System Manager" not in roles and "Chat AI Manager" not in roles:
+		execution_mode = "immediate"
+
 	# Background enqueue (avoid re-enqueue when already in worker)
 	if execution_mode != "_worker" and should_run_background(user_message, settings, execution_mode):
 		enqueue_turn(
@@ -213,9 +224,6 @@ def run_turn(
 		}
 
 	clear_cancel(session_name)
-	session = frappe.get_doc("AI Chat Session", session_name)
-	if session.user != frappe.session.user and "System Manager" not in frappe.get_roles():
-		frappe.throw("Not permitted", frappe.PermissionError)
 
 	from chat_ai.core.i18n import normalize_language
 

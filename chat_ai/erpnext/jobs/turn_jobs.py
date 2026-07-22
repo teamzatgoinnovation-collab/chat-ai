@@ -21,8 +21,9 @@ def should_run_background(message: str, settings: dict | None = None, execution_
 		return False
 	if mode == "background":
 		return bool(settings.get("enable_background_turns") or settings.get("enable_background_jobs"))
+	# "scheduled" is an explicit opt-in (managers only — gated in orchestrator).
 	if mode == "scheduled":
-		return True
+		return bool(settings.get("enable_background_turns") or settings.get("enable_background_jobs"))
 	# Heuristic path only when background turns explicitly enabled
 	if not settings.get("enable_background_turns"):
 		return False
