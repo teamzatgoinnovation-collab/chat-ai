@@ -120,6 +120,8 @@ class TestPlanner(unittest.TestCase):
 		self.assertTrue(plan.needs_plan_approval)
 		self.assertEqual(plan.risk_level, "high")
 		self.assertEqual(len(plan.implementation_plan), 2)
+		# Routine "Using …" lines are stripped from chat-facing assumptions
+		self.assertEqual(plan.assumptions, [])
 
 	def test_parse_candidate_tools(self):
 		raw = """{
@@ -183,6 +185,36 @@ class TestAssistantModeResolve(unittest.TestCase):
 		self.assertEqual(resolve_assistant_mode({}, "Create a task for tomorrow"), MODE_ERP)
 		self.assertEqual(normalize_mode("Normal Chat"), MODE_ERP)
 
+
+
+class TestStripUsingPreamble(unittest.TestCase):
+	def test_strips_company_currency_fy(self):
+		import importlib.util
+		from pathlib import Path
+
+		path = Path(__file__).resolve().parents[1] / "erpnext" / "context" / "defaults.py"
+		spec = importlib.util.spec_from_file_location("chat_ai_defaults_under_test", path)
+		mod = importlib.util.module_from_spec(spec)
+		# defaults imports frappe; stub before exec
+		import sys
+		import types
+
+		sys.modules.setdefault("frappe", types.SimpleNamespace(db=None, defaults=None, utils=None))
+		spec.loader.exec_module(mod)
+		sample = (
+			"Using Company: erpZatgo.\n"
+			"Using Currency: SAR (company default).\n"
+			"Using Fiscal Year: 2026 (active).\n"
+			"\n"
+			"Hi there! How can I help you today?"
+		)
+		self.assertEqual(mod.strip_using_preamble(sample), "Hi there! How can I help you today?")
+		self.assertEqual(
+			mod.filter_user_visible_assumptions(
+				["Using Company: X", "Using Currency: SAR", "Chose warehouse A over B"]
+			),
+			["Chose warehouse A over B"],
+		)
 
 
 class TestPlanApprovalResponse(unittest.TestCase):

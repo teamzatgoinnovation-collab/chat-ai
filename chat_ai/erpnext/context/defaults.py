@@ -2,27 +2,25 @@
 
 from __future__ import annotations
 
+import re
+
 import frappe
 
-# Shown in chat only when meaningful — not routine company defaults.
-_SILENT_ASSUMPTION_LABELS = frozenset({"currency", "fiscal year", "branch", "warehouse"})
+# Never surface these (or any "Using …:" line) in chat replies.
+_USING_LINE = re.compile(r"^Using\s+[^:]+:\s*.+$", re.IGNORECASE)
 
 
 def resolve_intelligent_defaults(context: dict | None = None) -> dict:
-	"""Return { values: {...}, assumptions: [...] }.
+	"""Return { values: {...}, assumptions: [] }.
 
-	Currency / Fiscal Year / Branch / Warehouse are applied as values but not
-	surfaced as 'Using …' lines in the chat reply.
+	Defaults are applied silently for tools — never as chat preamble lines.
 	"""
 	context = context or {}
 	values: dict = {}
-	assumptions: list[str] = []
 
 	company = _resolve_company(context)
 	if company:
 		values["company"] = company
-		# Only mention Company when it is a clear single default (not every turn noise)
-		# Callers that need a spoken company line (e.g. status brief) can read values.
 
 	branch = _resolve_branch(company)
 	if branch:
@@ -41,25 +39,48 @@ def resolve_intelligent_defaults(context: dict | None = None) -> dict:
 		if fy:
 			values["fiscal_year"] = fy
 
-	return {"values": values, "assumptions": assumptions}
+	return {"values": values, "assumptions": []}
 
 
 def filter_user_visible_assumptions(assumptions: list[str] | None) -> list[str]:
-	"""Drop routine default lines (Currency, Fiscal Year, etc.) from chat text."""
+	"""Drop all 'Using …:' routine default lines from chat-facing assumption lists."""
 	out = []
 	for a in assumptions or []:
 		s = str(a or "").strip()
 		if not s:
 			continue
-		low = s.lower()
-		if low.startswith("using currency:") or " (company default)" in low:
+		if _USING_LINE.match(s):
 			continue
-		if low.startswith("using fiscal year:") or " (active)." in low and "fiscal" in low:
-			continue
-		if any(low.startswith(f"using {label}:") for label in _SILENT_ASSUMPTION_LABELS):
+		if s.lower().startswith("using "):
 			continue
 		out.append(s)
 	return out
+
+
+def strip_using_preamble(text: str | None) -> str:
+	"""Remove leading 'Using Company/Currency/Fiscal Year…' lines the model may emit."""
+	if not text:
+		return text or ""
+	lines = text.splitlines()
+	i = 0
+	while i < len(lines):
+		raw = lines[i]
+		s = raw.strip()
+		if not s:
+			i += 1
+			continue
+		if _USING_LINE.match(s) or s.lower().startswith("using "):
+			i += 1
+			continue
+		# Also drop a lone "**Assumptions:**" / "Assumptions:" header if followed by Using lines only
+		if s.lower().rstrip(":") in ("assumptions", "**assumptions**"):
+			i += 1
+			continue
+		break
+	# Trim leading blank lines after strip
+	while i < len(lines) and not lines[i].strip():
+		i += 1
+	return "\n".join(lines[i:]).lstrip("\n")
 
 
 def _assumption(label: str, value: str, reason: str = "") -> str:

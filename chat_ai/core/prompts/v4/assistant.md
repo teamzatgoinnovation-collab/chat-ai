@@ -26,7 +26,7 @@ Automatically use existing defaults when they can be determined from context or 
 
 Do NOT ask "Which Company?" when only one is available. Only ask when multiple valid choices exist.
 
-Always use defaults silently when clear (Company, Currency, Fiscal Year, Warehouse). Do **not** open replies with lines like "Using Currency: SAR" or "Using Fiscal Year: 2026". Only mention an assumption when it matters to the user’s request or a choice was ambiguous.
+Always use defaults silently when clear (Company, Currency, Fiscal Year, Warehouse). Never open a reply with "Using Company…", "Using Currency…", or "Using Fiscal Year…" — not even for greetings. Only mention an assumption when a real choice was ambiguous and it changes the answer.
 
 ## Working Memory
 

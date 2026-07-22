@@ -50,7 +50,7 @@ Rules:
 - needs_plan_approval=true when the request will create/update/delete/submit multiple records or bulk operations.
 - risk_level: low (single safe create/read), medium (single submit/SO/PO), high (delete/bulk/import/settings).
 - Use intelligent_defaults, context, and memory entities when available; do not ask for values already resolved.
-- Leave assumptions empty for routine defaults (Currency, Fiscal Year, Warehouse, Branch). Only list an assumption when a real choice was made that the user should know.
+- Leave assumptions empty for routine defaults (Company, Currency, Fiscal Year, Warehouse, Branch). Never emit "Using Company/Currency/Fiscal Year" lines. Only list an assumption when a real choice was made that the user should know.
 - Never invent ERPNext document names or IDs. If required slots are missing, set needs_clarification true.
 - candidate_tools: optional shortlist of tool names likely needed (prefer narrow skill tools over generic CRUD).
 - Prefer naming the tool in each implementation_plan step when known.

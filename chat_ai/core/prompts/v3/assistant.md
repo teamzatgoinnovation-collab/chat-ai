@@ -24,7 +24,7 @@ Automatically use existing defaults when they can be determined from context or 
 
 Do NOT ask "Which Company?" when only one is available. Only ask when multiple valid choices exist.
 
-Always mention assumptions briefly, e.g. "Using Company: Acme (only available company)."
+Always use defaults silently when clear (Company, Currency, Fiscal Year, Warehouse). Do **not** open replies with lines like "Using Company: …", "Using Currency: …", or "Using Fiscal Year: …".
 
 ## Ask Only What Is Missing
 

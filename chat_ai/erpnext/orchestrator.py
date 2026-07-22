@@ -35,7 +35,7 @@ from chat_ai.core.assistant_mode import (
 from chat_ai.core.tool_enrichment import enrich_tool_args
 from chat_ai.core.artifacts import ArtifactBuilder, persist_artifacts
 from chat_ai.core.tool_pipeline import clear_cancel
-from chat_ai.erpnext.context.defaults import filter_user_visible_assumptions
+from chat_ai.erpnext.context.defaults import filter_user_visible_assumptions, strip_using_preamble
 from chat_ai.erpnext.events.realtime_events import publish_progress, publish_stream, publish_typed_stream
 from chat_ai.erpnext.settings import get_settings_dict
 from chat_ai.plugin.loader import load_all as load_plugins
@@ -364,7 +364,7 @@ def run_turn(
 		resp = plan_approval(
 			"I'll proceed with this plan after you confirm:",
 			plan.implementation_plan,
-			plan.assumptions,
+			filter_user_visible_assumptions(plan.assumptions),
 			token=token,
 		)
 		return _persist(session, memory, user_message, resp, settings, tokens=(plan.tokens_in, plan.tokens_out), model=plan.model)
@@ -412,7 +412,7 @@ def run_turn(
 			+ memory_note,
 		),
 	]
-	for h in history[-10:]:
+	for h in _history_for_llm(history, 10):
 		messages.append(LLMMessage(role=h["role"], content=h["content"]))
 	messages.append(LLMMessage(role="user", content=msg))
 
@@ -435,9 +435,8 @@ def run_turn(
 				assumptions=plan.assumptions,
 				already_content=result.content,
 			)
-			visible = filter_user_visible_assumptions(plan.assumptions)
-			if visible and visible[0] not in md:
-				md = "\n".join(visible[:3]) + "\n\n" + md
+			md = strip_using_preamble(md)
+			# Do not prepend Using Company/Currency/FY lines to chat replies
 			resp = AssistantResponse(markdown=md)
 			# Attach blocks from prior tool results if any
 			if tool_results:
@@ -492,9 +491,7 @@ def run_turn(
 			)
 
 	resp = build_from_tool_results(tool_results, preface="Here’s what I found:")
-	visible = filter_user_visible_assumptions(plan.assumptions)
-	if visible:
-		resp.markdown = "\n".join(visible[:3]) + "\n\n" + resp.markdown
+	resp.markdown = strip_using_preamble(resp.markdown)
 	publish_progress(session_name, "done")
 	if settings.get("enable_streaming", 1):
 		publish_typed_stream(session_name, resp.markdown or "", chunk_size=5)
@@ -521,40 +518,66 @@ def _stream_final_answer(
 	assumptions=None,
 	already_content: str | None = None,
 ) -> str:
-	"""Stream final assistant text when enabled; otherwise return fallback content."""
+	"""Stream final assistant text when enabled; otherwise return fallback content.
+
+	Always strip leading 'Using …' preambles before typing/stream publish so Desk
+	never shows Company/Currency/FY boilerplate.
+	"""
 	# When the non-stream chat already returned content without tool_calls, publish it
 	# in typing-sized chunks for Desk UX.
 	if already_content:
+		cleaned = strip_using_preamble(already_content)
 		if settings.get("enable_streaming", 1):
-			publish_typed_stream(session_name, already_content, chunk_size=5)
-		return already_content
+			publish_typed_stream(session_name, cleaned, chunk_size=5)
+		return cleaned
 	if not settings.get("enable_streaming", 1):
-		return fallback
+		return strip_using_preamble(fallback)
 	parts: list[str] = []
 	try:
 		for chunk in provider.chat_stream(messages):
 			if not chunk:
 				continue
 			parts.append(chunk)
-			publish_stream(session_name, chunk, done=False)
 	except Exception:
-		return fallback
-	return "".join(parts) or fallback
+		return strip_using_preamble(fallback)
+	cleaned = strip_using_preamble("".join(parts) or fallback)
+	publish_typed_stream(session_name, cleaned, chunk_size=5)
+	return cleaned
+
+
+def _history_for_llm(history: list | None, limit: int = 6) -> list:
+	"""Pass recent turns to the model with assistant 'Using …' noise stripped."""
+	out = []
+	for h in (history or [])[-limit:]:
+		role = h.get("role") if isinstance(h, dict) else None
+		content = (h.get("content") if isinstance(h, dict) else None) or ""
+		if role == "assistant":
+			content = strip_using_preamble(content)
+		out.append({"role": role, "content": content})
+	return out
 
 
 def _direct_answer(provider, settings, msg, context, history, plan):
 	"""Answer simple how-to / explanation questions without tool calls."""
 	messages = [
 		LLMMessage(role="system", content=get_prompt_text(settings)),
-		LLMMessage(role="system", content="Context:\n" + json.dumps(context, default=str)[:4000]),
+		LLMMessage(
+			role="system",
+			content=(
+				"Context:\n"
+				+ json.dumps(context, default=str)[:4000]
+				+ "\n\nNever start replies with 'Using Company/Currency/Fiscal Year' lines."
+			),
+		),
 	]
-	for h in (history or [])[-6:]:
+	for h in _history_for_llm(history, 6):
 		messages.append(LLMMessage(role=h["role"], content=h["content"]))
 	messages.append(
 		LLMMessage(
 			role="user",
 			content=msg
-			+ "\n\n(Answer like a helpful coworker: natural, short, and clear. No tools. No long documentation.)",
+			+ "\n\n(Answer like a helpful coworker: natural, short, and clear. "
+			"No tools. No long documentation. No 'Using …' preamble.)",
 		)
 	)
 	session_name = ""
@@ -569,19 +592,17 @@ def _direct_answer(provider, settings, msg, context, history, plan):
 			for chunk in provider.chat_stream(messages):
 				if chunk:
 					parts.append(chunk)
-					publish_stream(session_name, chunk, done=False)
-			md = "".join(parts)
-			publish_stream(session_name, "", done=True)
+			md = strip_using_preamble("".join(parts) or plan.raw_content or "Done.")
+			publish_typed_stream(session_name, md, chunk_size=5)
 		except Exception:
 			result = provider.chat(messages)
-			md = result.content or plan.raw_content or "Done."
+			md = strip_using_preamble(result.content or plan.raw_content or "Done.")
+			publish_typed_stream(session_name, md, chunk_size=5)
 	else:
 		result = provider.chat(messages)
-		md = result.content or plan.raw_content or "Done."
-	if plan.assumptions:
-		visible = filter_user_visible_assumptions(plan.assumptions)
-		if visible:
-			md = "\n".join(visible[:3]) + "\n\n" + md
+		md = strip_using_preamble(result.content or plan.raw_content or "Done.")
+		if settings.get("enable_streaming", 1) and session_name:
+			publish_typed_stream(session_name, md, chunk_size=5)
 	return AssistantResponse(markdown=md)
 
 
@@ -607,6 +628,7 @@ def _load_memory(session_name: str) -> ConversationMemory:
 
 def _persist(session, memory, user_message, resp: AssistantResponse, settings, tokens=(0, 0), model="", error=False, tool_results=None):
 	start = time.time()
+	resp.markdown = strip_using_preamble(resp.markdown)
 	# user message
 	frappe.get_doc(
 		{
