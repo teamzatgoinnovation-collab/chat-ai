@@ -262,16 +262,19 @@ def _ensure_desk_entry():
 			icon.flags.ignore_links = True
 			icon.insert(ignore_permissions=True)
 
-		# Deduplicate leftover Chat AI icons (keep newest)
-		names = frappe.get_all(
+		# Deduplicate: keep one top-level "Chat AI", drop leftovers (e.g. "AI Admin")
+		keepers = frappe.get_all(
 			"Desktop Icon",
 			filters={"app": "chat_ai", "label": "Chat AI"},
 			pluck="name",
 			order_by="modified desc",
 		)
-		for extra in names[1:]:
+		keep = keepers[0] if keepers else None
+		for name in frappe.get_all("Desktop Icon", filters={"app": "chat_ai"}, pluck="name"):
+			if name == keep:
+				continue
 			try:
-				frappe.delete_doc("Desktop Icon", extra, force=1, ignore_permissions=True)
+				frappe.delete_doc("Desktop Icon", name, force=1, ignore_permissions=True)
 			except Exception:
 				pass
 	except Exception:
