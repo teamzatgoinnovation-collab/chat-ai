@@ -168,6 +168,11 @@ chat_ai.sidebar.AppOptions = {
 			enableVoiceIn: true,
 			enableVoiceOut: true,
 			autoSpeak: false,
+			ttsEngine: "Voicebox",
+			voiceboxUrl: "http://127.0.0.1:17493",
+			voiceboxProfile: "",
+			voiceboxEngine: "",
+			voiceboxViaServer: false,
 			recognition: null,
 			liveTranscript: "",
 			voicesReady: false,
@@ -222,6 +227,7 @@ chat_ai.sidebar.AppOptions = {
 			return !!(window.SpeechRecognition || window.webkitSpeechRecognition);
 		},
 		ttsAvailable() {
+			if (this.ttsEngine === "Voicebox") return true;
 			return !!(window.speechSynthesis && window.SpeechSynthesisUtterance);
 		},
 	},
@@ -377,6 +383,11 @@ chat_ai.sidebar.AppOptions = {
 				if (d.language) this.language = d.language;
 				this.enableVoiceIn = !!d.enable_voice_input;
 				this.enableVoiceOut = !!d.enable_voice_output;
+				this.ttsEngine = d.tts_engine || "Voicebox";
+				this.voiceboxUrl = (d.voicebox_url || "http://127.0.0.1:17493").replace(/\/$/, "");
+				this.voiceboxProfile = d.voicebox_profile || "";
+				this.voiceboxEngine = d.voicebox_engine || "";
+				this.voiceboxViaServer = !!d.voicebox_via_server;
 				/* Speak setting on → automatic speech; local toggle can override */
 				const stored = localStorage.getItem("chat_ai_auto_speak");
 				if (stored === "1" || stored === "0") {
@@ -993,11 +1004,57 @@ chat_ai.sidebar.AppOptions = {
 				.replace(/\s+/g, " ")
 				.trim();
 		},
-		speak(msg) {
+		voiceboxLang() {
+			const c = (this.language || "en").split("-")[0];
+			const ok = {
+				zh: 1,
+				en: 1,
+				ja: 1,
+				ko: 1,
+				de: 1,
+				fr: 1,
+				ru: 1,
+				pt: 1,
+				es: 1,
+				it: 1,
+				he: 1,
+				ar: 1,
+				da: 1,
+				el: 1,
+				fi: 1,
+				hi: 1,
+				ms: 1,
+				nl: 1,
+				no: 1,
+				pl: 1,
+				sv: 1,
+				sw: 1,
+				tr: 1,
+			};
+			return ok[c] ? c : "en";
+		},
+		async speak(msg) {
 			if (!this.enableVoiceOut || !this.ttsAvailable || !msg || !msg.text) return;
 			this.stopSpeaking();
 			const plain = this.cleanForSpeech(msg.text);
 			if (!plain) return;
+			this.speakingId = msg.id;
+			if (this.ttsEngine === "Voicebox") {
+				try {
+					await this.speakVoicebox(plain, msg.id);
+					return;
+				} catch (e) {
+					console.warn("Voicebox speak failed, falling back to browser TTS", e);
+					if (this.speakingId !== msg.id) return;
+				}
+			}
+			this.speakBrowser(plain, msg.id);
+		},
+		speakBrowser(plain, msgId) {
+			if (!(window.speechSynthesis && window.SpeechSynthesisUtterance)) {
+				this.speakingId = null;
+				return;
+			}
 			const u = new SpeechSynthesisUtterance(plain);
 			u.lang = this.bcp47;
 			const match = this.pickTtsVoice(this.bcp47);
@@ -1008,17 +1065,106 @@ chat_ai.sidebar.AppOptions = {
 			u.rate = this.language === "ar" || this.language === "ml" ? 0.9 : 1;
 			u.pitch = 1;
 			u.onend = () => {
-				if (this.speakingId === msg.id) this.speakingId = null;
+				if (this.speakingId === msgId) this.speakingId = null;
 			};
 			u.onerror = () => {
-				if (this.speakingId === msg.id) this.speakingId = null;
+				if (this.speakingId === msgId) this.speakingId = null;
 			};
-			this.speakingId = msg.id;
+			this.speakingId = msgId;
 			window.speechSynthesis.speak(u);
+		},
+		async speakVoicebox(plain, msgId) {
+			let audioB64 = null;
+			let contentType = "audio/wav";
+			let audioUrl = null;
+
+			if (this.voiceboxViaServer) {
+				const r = await frappe.call({
+					method: "chat_ai.api.voice.speak",
+					args: { text: plain, language: this.voiceboxLang() },
+					freeze: false,
+				});
+				const payload = (r && r.message) || {};
+				if (!payload.ok) throw new Error(payload.error || "Voicebox proxy failed");
+				const data = payload.data || {};
+				audioB64 = data.audio_b64;
+				contentType = data.content_type || contentType;
+				audioUrl = data.audio_url || null;
+			} else {
+				const base = this.voiceboxUrl || "http://127.0.0.1:17493";
+				const body = {
+					text: plain.slice(0, 10000),
+					language: this.voiceboxLang(),
+				};
+				if (this.voiceboxProfile) body.profile = this.voiceboxProfile;
+				if (this.voiceboxEngine) body.engine = this.voiceboxEngine;
+				const speakRes = await fetch(`${base}/speak`, {
+					method: "POST",
+					headers: {
+						"Content-Type": "application/json",
+						"X-Voicebox-Client-Id": "chat-ai",
+					},
+					body: JSON.stringify(body),
+				});
+				if (!speakRes.ok) {
+					const errText = await speakRes.text();
+					throw new Error(errText || `Voicebox HTTP ${speakRes.status}`);
+				}
+				const gen = await speakRes.json();
+				const genId = gen && gen.id;
+				if (!genId) throw new Error("Voicebox returned no generation id");
+				const deadline = Date.now() + 120000;
+				let status = gen.status || "generating";
+				while (Date.now() < deadline) {
+					if (this.speakingId !== msgId) return;
+					const histRes = await fetch(`${base}/history/${genId}`, {
+						headers: { "X-Voicebox-Client-Id": "chat-ai" },
+					});
+					if (histRes.ok) {
+						const hist = await histRes.json();
+						status = hist.status || status;
+						if (status === "completed") break;
+						if (status === "failed") throw new Error(hist.error || "Voicebox failed");
+					}
+					await new Promise((resolve) => setTimeout(resolve, 600));
+				}
+				if (status !== "completed") throw new Error("Voicebox timed out");
+				audioUrl = `${base}/audio/${genId}`;
+			}
+
+			if (this.speakingId !== msgId) return;
+
+			const audio = new Audio();
+			this._voiceboxAudio = audio;
+			if (audioB64) {
+				audio.src = `data:${contentType};base64,${audioB64}`;
+			} else if (audioUrl) {
+				audio.src = audioUrl;
+			} else {
+				throw new Error("No Voicebox audio");
+			}
+			audio.onended = () => {
+				if (this.speakingId === msgId) this.speakingId = null;
+				if (this._voiceboxAudio === audio) this._voiceboxAudio = null;
+			};
+			audio.onerror = () => {
+				if (this.speakingId === msgId) this.speakingId = null;
+				if (this._voiceboxAudio === audio) this._voiceboxAudio = null;
+			};
+			await audio.play();
 		},
 		stopSpeaking() {
 			try {
 				if (window.speechSynthesis) window.speechSynthesis.cancel();
+			} catch (e) {
+				/* ignore */
+			}
+			try {
+				if (this._voiceboxAudio) {
+					this._voiceboxAudio.pause();
+					this._voiceboxAudio.src = "";
+					this._voiceboxAudio = null;
+				}
 			} catch (e) {
 				/* ignore */
 			}

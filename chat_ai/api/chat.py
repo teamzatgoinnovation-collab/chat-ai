@@ -219,11 +219,21 @@ def get_ui_locale():
 	voice_in = 1
 	voice_out = 1
 	auto_speak = 0
+	tts_engine = "Voicebox"
+	voicebox_url = "http://127.0.0.1:17493"
+	voicebox_profile = ""
+	voicebox_engine = ""
+	voicebox_via_server = 0
 	try:
 		lang = normalize_language(frappe.db.get_single_value("Chat AI Settings", "default_language"))
 		voice_in = int(frappe.db.get_single_value("Chat AI Settings", "enable_voice_input") or 0)
 		voice_out = int(frappe.db.get_single_value("Chat AI Settings", "enable_voice_output") or 0)
 		auto_speak = int(frappe.db.get_single_value("Chat AI Settings", "auto_speak_replies") or 0)
+		tts_engine = frappe.db.get_single_value("Chat AI Settings", "tts_engine") or "Voicebox"
+		voicebox_url = frappe.db.get_single_value("Chat AI Settings", "voicebox_url") or voicebox_url
+		voicebox_profile = frappe.db.get_single_value("Chat AI Settings", "voicebox_profile") or ""
+		voicebox_engine = frappe.db.get_single_value("Chat AI Settings", "voicebox_engine") or ""
+		voicebox_via_server = int(frappe.db.get_single_value("Chat AI Settings", "voicebox_via_server") or 0)
 	except Exception:
 		pass
 	return ok(
@@ -236,6 +246,11 @@ def get_ui_locale():
 			"enable_voice_input": voice_in,
 			"enable_voice_output": voice_out,
 			"auto_speak_replies": auto_speak,
+			"tts_engine": tts_engine,
+			"voicebox_url": voicebox_url,
+			"voicebox_profile": voicebox_profile,
+			"voicebox_engine": voicebox_engine,
+			"voicebox_via_server": voicebox_via_server,
 		}
 	)
 

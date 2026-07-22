@@ -59,6 +59,12 @@
   "enable_voice_input",
   "enable_voice_output",
   "auto_speak_replies",
+  "tts_section",
+  "tts_engine",
+  "voicebox_url",
+  "voicebox_profile",
+  "voicebox_engine",
+  "voicebox_via_server",
   "platform_section",
   "enable_plugin_discovery",
   "enabled_plugins",
@@ -401,6 +407,46 @@
    "label": "Auto-Speak Assistant Replies",
    "default": "1",
    "description": "When Voice Output (Speak) is on, read each assistant reply aloud automatically."
+  },
+  {
+   "fieldname": "tts_section",
+   "fieldtype": "Section Break",
+   "label": "Speech Engine (Voicebox)"
+  },
+  {
+   "fieldname": "tts_engine",
+   "fieldtype": "Select",
+   "label": "TTS Engine",
+   "options": "Voicebox\nBrowser TTS",
+   "default": "Voicebox",
+   "description": "Voicebox: https://github.com/jamiepine/voicebox — local AI voice studio (POST /speak)."
+  },
+  {
+   "fieldname": "voicebox_url",
+   "fieldtype": "Data",
+   "label": "Voicebox URL",
+   "default": "http://127.0.0.1:17493",
+   "description": "Running Voicebox API base URL (default port 17493)."
+  },
+  {
+   "fieldname": "voicebox_profile",
+   "fieldtype": "Data",
+   "label": "Voicebox Profile",
+   "description": "Optional voice profile name or id. Empty = Voicebox MCP/client default."
+  },
+  {
+   "fieldname": "voicebox_engine",
+   "fieldtype": "Select",
+   "label": "Voicebox Model Engine",
+   "options": "\nkokoro\nqwen\nqwen_custom_voice\nluxtts\nchatterbox\nchatterbox_turbo\ntada",
+   "description": "Optional engine override. Empty = profile / Voicebox default."
+  },
+  {
+   "fieldname": "voicebox_via_server",
+   "fieldtype": "Check",
+   "label": "Proxy Voicebox via ERP Server",
+   "default": "0",
+   "description": "On: Desk calls ERP, ERP calls Voicebox (Voicebox must be reachable from the server). Off: browser calls Voicebox URL directly (add Desk origin to VOICEBOX_CORS_ORIGINS)."
   },
   {
    "fieldname": "platform_section",
