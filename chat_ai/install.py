@@ -199,7 +199,11 @@ def _sanitize_provider_settings():
 
 
 def _ensure_desk_entry():
-	"""Ensure Module Def, Workspace Sidebar app field, and Desktop Icon for AI Admin."""
+	"""Ensure Workspace Sidebar + a top-level Desktop Icon that does not depend on App logos.
+
+	Frappe v16 App icons fall back to plain text when /assets/<app>/images is missing
+	(common on frappe_docker until assets are linked). Prefer a Link icon with a lucide name.
+	"""
 	try:
 		# Workspace Sidebar created from workspace sync — pin app name
 		if frappe.db.exists("Workspace Sidebar", "AI Admin"):
@@ -208,40 +212,68 @@ def _ensure_desk_entry():
 				sb.app = "chat_ai"
 				sb.save(ignore_permissions=True)
 
-		# Desktop Icon → Workspace Sidebar AI Admin
-		label = "AI Admin"
-		existing = frappe.db.get_value("Desktop Icon", {"label": label}, "name")
-		if existing:
-			icon = frappe.get_doc("Desktop Icon", existing)
+		# Collapse broken App-type "Chat AI" + nested "AI Admin" into one top-level Link.
+		for name in frappe.get_all(
+			"Desktop Icon",
+			filters={"app": "chat_ai"},
+			pluck="name",
+		):
+			doc = frappe.get_doc("Desktop Icon", name)
 			dirty = False
-			if icon.app != "chat_ai":
-				icon.app = "chat_ai"
+			if doc.label != "Chat AI":
+				doc.label = "Chat AI"
 				dirty = True
-			if icon.link_type != "Workspace Sidebar":
-				icon.link_type = "Workspace Sidebar"
+			if doc.icon_type != "Link":
+				doc.icon_type = "Link"
 				dirty = True
-			if icon.link_to != "AI Admin":
-				icon.link_to = "AI Admin"
+			if doc.link_type != "Workspace Sidebar":
+				doc.link_type = "Workspace Sidebar"
 				dirty = True
-			if icon.hidden:
-				icon.hidden = 0
+			if doc.link_to != "AI Admin":
+				doc.link_to = "AI Admin"
+				dirty = True
+			if doc.icon != "bot":
+				doc.icon = "bot"
+				dirty = True
+			if doc.parent_icon:
+				doc.parent_icon = ""
+				dirty = True
+			if doc.hidden:
+				doc.hidden = 0
 				dirty = True
 			if dirty:
-				icon.save(ignore_permissions=True)
-		else:
-			frappe.get_doc(
+				doc.flags.ignore_links = True
+				doc.save(ignore_permissions=True)
+
+		if not frappe.db.exists("Desktop Icon", {"app": "chat_ai"}):
+			icon = frappe.get_doc(
 				{
 					"doctype": "Desktop Icon",
-					"label": label,
+					"label": "Chat AI",
 					"app": "chat_ai",
 					"icon_type": "Link",
 					"link_type": "Workspace Sidebar",
 					"link_to": "AI Admin",
-					"icon": "solid-color",
+					"icon": "bot",
 					"standard": 1,
 					"hidden": 0,
 				}
-			).insert(ignore_permissions=True)
+			)
+			icon.flags.ignore_links = True
+			icon.insert(ignore_permissions=True)
+
+		# Deduplicate leftover Chat AI icons (keep newest)
+		names = frappe.get_all(
+			"Desktop Icon",
+			filters={"app": "chat_ai", "label": "Chat AI"},
+			pluck="name",
+			order_by="modified desc",
+		)
+		for extra in names[1:]:
+			try:
+				frappe.delete_doc("Desktop Icon", extra, force=1, ignore_permissions=True)
+			except Exception:
+				pass
 	except Exception:
 		frappe.log_error(title="chat_ai desk entry")
 
@@ -256,14 +288,14 @@ def _load_plugins():
 
 
 def _sync_public_assets():
-	"""Copy sidebar JS/CSS into bench assets paths.
+	"""Copy/link public JS/CSS/images into bench assets paths.
 
 	Writes:
 	- sites/chat_ai_assets/ (shared sites volume — durable)
-	- assets/chat_ai/ when writable (backend local assets)
+	- assets/chat_ai via symlink when sites/assets → ../assets (frappe_docker)
 
-	On frappe_docker, also run deploy/sync_frontend_assets.sh (or the one-liner
-	in docs) so the frontend container nginx can serve /assets/chat_ai/*.
+	Frontend and backend each have a container-local assets dir; migrate on
+	backend alone does not update frontend. Prefer symlink to app public.
 	"""
 	try:
 		src = frappe.get_app_path("chat_ai", "public")
@@ -272,12 +304,33 @@ def _sync_public_assets():
 		sites = frappe.utils.get_site_path("..")
 		durable = os.path.abspath(os.path.join(sites, "chat_ai_assets"))
 		_copy_tree(src, durable)
-		bench_assets = os.path.abspath(os.path.join(sites, "..", "assets", "chat_ai"))
-		_copy_tree(src, bench_assets)
-		# Prefer real files under sites/assets/chat_ai when sites/assets is a real dir
+
 		sites_assets = os.path.abspath(os.path.join(sites, "assets"))
-		if os.path.isdir(sites_assets) and not os.path.islink(sites_assets):
-			_copy_tree(src, os.path.join(sites_assets, "chat_ai"))
+		targets = []
+		if os.path.lexists(sites_assets):
+			targets.append(os.path.realpath(sites_assets))
+		targets.append(os.path.abspath(os.path.join(sites, "..", "assets")))
+		seen: set[str] = set()
+		for base in targets:
+			if not base or base in seen:
+				continue
+			seen.add(base)
+			try:
+				os.makedirs(base, exist_ok=True)
+			except OSError:
+				continue
+			dest = os.path.join(base, "chat_ai")
+			try:
+				if os.path.islink(dest) and os.path.realpath(dest) == os.path.realpath(src):
+					continue
+				if os.path.islink(dest):
+					os.unlink(dest)
+				elif os.path.isdir(dest):
+					_copy_tree(src, dest)
+					continue
+				os.symlink(src, dest)
+			except OSError:
+				_copy_tree(src, dest)
 	except Exception:
 		frappe.log_error(title="chat_ai asset sync")
 
