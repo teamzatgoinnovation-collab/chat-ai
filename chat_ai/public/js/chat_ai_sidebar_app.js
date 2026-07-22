@@ -614,7 +614,7 @@ chat_ai.sidebar.AppOptions = {
 				const box = this.$refs.messages;
 				if (box) box.scrollTop = box.scrollHeight;
 			});
-			const delay = take.includes("\n") ? 28 : 14;
+			const delay = take.includes("\n") ? 36 : take.match(/[.!?]/) ? 42 : 16;
 			this._typeTimer = setTimeout(() => this.drainTypewriter(), delay);
 		},
 		typeToFull(msgId, fullText, meta) {

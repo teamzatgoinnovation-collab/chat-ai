@@ -405,21 +405,56 @@ def _hr_optional():
 
 
 def _build_summary_md(company: str, sections: list, omitted: list) -> str:
+	who = company or "your company"
 	lines = [
-		f"# Company status{f' — {company}' if company else ''}",
-		f"_As of {today()}_",
+		f"Here’s a quick look at how {who} is doing as of {today()}.",
 		"",
 	]
 	for s in sections:
 		meta = s.get("meta") or {}
 		title = s.get("title") or s.get("key")
-		bits = [f"**{k}**: {v}" for k, v in meta.items() if v is not None and k != "note"]
-		lines.append(f"## {title}")
-		if bits:
-			lines.append(", ".join(bits))
-		elif meta.get("note"):
-			lines.append(str(meta["note"]))
+		key = s.get("key")
+		if key == "receivables":
+			lines.append(
+				f"**Receivables** — {meta.get('open_count', 0)} open invoices "
+				f"({meta.get('overdue_count', 0)} overdue, about {meta.get('overdue_amount', 0)} outstanding overdue)."
+			)
+		elif key == "payables":
+			lines.append(
+				f"**Payables** — {meta.get('open_count', 0)} open bills "
+				f"({meta.get('overdue_count', 0)} overdue)."
+			)
+		elif key == "cash":
+			if meta.get("note"):
+				lines.append(f"**Cash / bank** — {meta['note']}.")
+			else:
+				lines.append(
+					f"**Cash / bank** — {meta.get('account_count', 0)} accounts; "
+					f"combined balance about {meta.get('total_balance', 0)}."
+				)
+		elif key == "stock":
+			n = meta.get("low_count") or 0
+			lines.append(
+				f"**Stock** — {n} item(s) at low or zero qty"
+				+ (" — worth a look." if n else " — looking fine from this scan.")
+			)
+		elif key == "crm":
+			bits = []
+			if "open_leads" in meta:
+				bits.append(f"{meta['open_leads']} open leads")
+			if "open_opportunities" in meta:
+				bits.append(f"{meta['open_opportunities']} open opportunities")
+			lines.append("**Sales / CRM** — " + (", ".join(bits) if bits else "no open pipeline visible") + ".")
+		elif key == "projects":
+			lines.append(
+				f"**Projects / tasks** — {meta.get('open_projects', 0)} open projects, "
+				f"{meta.get('open_tasks', 0)} open tasks"
+				+ (f" ({meta.get('overdue_tasks', 0)} overdue)." if meta.get("overdue_tasks") else ".")
+			)
+		else:
+			bits = [f"{k}: {v}" for k, v in meta.items() if v is not None and k != "note"]
+			lines.append(f"**{title}** — " + (", ".join(bits) if bits else str(meta.get("note") or "ok")) + ".")
 		lines.append("")
 	if omitted:
-		lines.append("_Sections omitted (no permission or DocType):_ " + ", ".join(omitted))
+		lines.append("_Skipped (no access or not installed):_ " + ", ".join(omitted))
 	return "\n".join(lines)

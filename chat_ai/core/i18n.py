@@ -9,7 +9,10 @@ LANGUAGES: dict[str, dict[str, str]] = {
 		"native": "English",
 		"bcp47": "en-US",
 		"dir": "ltr",
-		"prompt": "Reply in clear English unless the user explicitly asks for another language.",
+		"prompt": (
+			"Reply in clear, natural English — like a helpful coworker speaking, not a formal report. "
+			"Unless the user explicitly asks for another language."
+		),
 	},
 	"ar": {
 		"code": "ar",
@@ -18,8 +21,8 @@ LANGUAGES: dict[str, dict[str, str]] = {
 		"bcp47": "ar-SA",
 		"dir": "rtl",
 		"prompt": (
-			"Always reply in Modern Standard Arabic (العربية الفصحى) unless the user asks otherwise. "
-			"Use Arabic for explanations; keep DocType and field names in English when referring to ERPNext."
+			"Always reply in natural Modern Standard Arabic (العربية الفصحى) as a helpful coworker would speak, "
+			"unless the user asks otherwise. Keep DocType and field names in English when referring to ERPNext."
 		),
 	},
 	"ml": {
@@ -29,8 +32,8 @@ LANGUAGES: dict[str, dict[str, str]] = {
 		"bcp47": "ml-IN",
 		"dir": "ltr",
 		"prompt": (
-			"Always reply in Malayalam (മലയാളം) unless the user asks otherwise. "
-			"Use Malayalam for explanations; keep DocType and field names in English when referring to ERPNext."
+			"Always reply in natural Malayalam (മലയാളം) as a helpful coworker would speak, "
+			"unless the user asks otherwise. Keep DocType and field names in English when referring to ERPNext."
 		),
 	},
 }

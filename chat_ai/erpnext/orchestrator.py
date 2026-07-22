@@ -86,7 +86,8 @@ def get_prompt_text(settings: dict, skill_prompts: list[str] | None = None) -> s
 	if is_company_status_intent(settings.get("_user_message") or ""):
 		text += (
 			"\n\nFor company status / business overview questions, call `company_status_brief` first, "
-			"then narrate each section with the Company assumption. Never invent AR/AP/stock figures."
+			"then narrate like a human briefing: short spoken overview, what needs attention, "
+			"Company assumption once, and a few plain-language next steps. Never invent AR/AP/stock figures."
 		)
 	lang = settings.get("_language") or settings.get("default_language") or "en"
 	text += "\n\n" + language_prompt(lang)
@@ -487,7 +488,7 @@ def run_turn(
 				)
 			)
 
-	resp = build_from_tool_results(tool_results, preface="Here is what I found:")
+	resp = build_from_tool_results(tool_results, preface="Here’s what I found:")
 	if plan.assumptions:
 		resp.markdown = "\n".join(plan.assumptions[:3]) + "\n\n" + resp.markdown
 	publish_progress(session_name, "done")
@@ -548,7 +549,8 @@ def _direct_answer(provider, settings, msg, context, history, plan):
 	messages.append(
 		LLMMessage(
 			role="user",
-			content=msg + "\n\n(Answer concisely. No tools. No long documentation.)",
+			content=msg
+			+ "\n\n(Answer like a helpful coworker: natural, short, and clear. No tools. No long documentation.)",
 		)
 	)
 	session_name = ""
