@@ -399,7 +399,8 @@
    "fieldname": "auto_speak_replies",
    "fieldtype": "Check",
    "label": "Auto-Speak Assistant Replies",
-   "default": "0"
+   "default": "1",
+   "description": "When Voice Output (Speak) is on, read each assistant reply aloud automatically."
   },
   {
    "fieldname": "platform_section",

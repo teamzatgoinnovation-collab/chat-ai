@@ -57,14 +57,20 @@ def publish_stream(session: str, chunk: str, done: bool = False):
 
 
 def publish_typed_stream(session: str, text: str, *, chunk_size: int = 6):
-	"""Publish full text as small chunks so Desk can render typing-style."""
+	"""Publish full text as word-sized chunks so Desk can type ChatGPT-style."""
+	import re
+
 	text = text or ""
 	if not text:
 		publish_stream(session, "", done=True)
 		return
-	step = max(1, int(chunk_size or 6))
-	for i in range(0, len(text), step):
-		publish_stream(session, text[i : i + step], done=False)
+	# Prefer whole words; fall back to small character groups
+	parts = re.findall(r"\s+|[^\s]+", text)
+	if not parts:
+		step = max(1, int(chunk_size or 6))
+		parts = [text[i : i + step] for i in range(0, len(text), step)]
+	for part in parts:
+		publish_stream(session, part, done=False)
 	publish_stream(session, "", done=True)
 
 

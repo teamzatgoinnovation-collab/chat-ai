@@ -130,7 +130,13 @@ def _ensure_settings():
 		if not frappe.db.get_global("chat_ai_voice_bootstrapped"):
 			doc.enable_voice_input = 1
 			doc.enable_voice_output = 1
+			doc.auto_speak_replies = 1
 			frappe.db.set_global("chat_ai_voice_bootstrapped", "1")
+		if not frappe.db.get_global("chat_ai_auto_speak_bootstrapped"):
+			# Speak on in settings → automatic speech by default
+			if int(getattr(doc, "enable_voice_output", 0) or 0):
+				doc.auto_speak_replies = 1
+			frappe.db.set_global("chat_ai_auto_speak_bootstrapped", "1")
 		# Platform v0.2.5 defaults (Check fields migrate as 0)
 		if not frappe.db.get_global("chat_ai_platform_025_bootstrapped"):
 			doc.enable_plugin_discovery = 1

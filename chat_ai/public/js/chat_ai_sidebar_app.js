@@ -13,6 +13,8 @@ const CAI_UI = {
 		newChat: "New",
 		working: "Working…",
 		speak: "Speak",
+		speakOn: "Auto-speak on",
+		speakOff: "Auto-speak off",
 		stop: "Stop",
 		mic: "Voice input — click to talk, click again to stop",
 		micOff: "Enable Voice Input in Chat AI Settings",
@@ -48,6 +50,8 @@ const CAI_UI = {
 		listening: "جاري الاستماع… تحدث بوضوح ثم اضغط الميكروفون للإيقاف",
 		working: "جاري العمل…",
 		speak: "تشغيل",
+		speakOn: "التحدث التلقائي مفعّل",
+		speakOff: "التحدث التلقائي متوقف",
 		stop: "إيقاف",
 		mic: "إدخال صوتي — اضغط للتحدث ثم مجدداً للإيقاف",
 		micOff: "فعّل الإدخال الصوتي من إعدادات Chat AI",
@@ -82,6 +86,8 @@ const CAI_UI = {
 		listening: "കേൾക്കുന്നു… വ്യക്തമായി സംസാരിച്ച് മൈക്ക് അമർത്തി നിർത്തുക",
 		working: "പ്രവർത്തിക്കുന്നു…",
 		speak: "കേൾക്കുക",
+		speakOn: "യാന്ത്രിക സംസാരം ഓൺ",
+		speakOff: "യാന്ത്രിക സംസാരം ഓഫ്",
 		stop: "നിർത്തുക",
 		mic: "വോയ്സ് — ക്ലിക്ക് ചെയ്ത് സംസാരിക്കുക, വീണ്ടും അമർത്തി നിർത്തുക",
 		micOff: "Chat AI Settings-ൽ Voice Input ഓണാക്കുക",
@@ -371,7 +377,15 @@ chat_ai.sidebar.AppOptions = {
 				if (d.language) this.language = d.language;
 				this.enableVoiceIn = !!d.enable_voice_input;
 				this.enableVoiceOut = !!d.enable_voice_output;
-				this.autoSpeak = !!d.auto_speak_replies;
+				/* Speak setting on → automatic speech; local toggle can override */
+				const stored = localStorage.getItem("chat_ai_auto_speak");
+				if (stored === "1" || stored === "0") {
+					this.autoSpeak = stored === "1" && this.enableVoiceOut;
+				} else {
+					this.autoSpeak =
+						this.enableVoiceOut &&
+						(d.auto_speak_replies == null ? true : !!d.auto_speak_replies);
+				}
 				localStorage.setItem("chat_ai_lang", this.language);
 			} catch (e) {
 				/* keep defaults */
@@ -601,10 +615,10 @@ chat_ai.sidebar.AppOptions = {
 				}
 				return;
 			}
-			/* Type a few characters at a time for readable pace */
-			const n = this._typeQueue.length > 80 ? 4 : this._typeQueue.length > 20 ? 3 : 2;
-			const take = this._typeQueue.slice(0, n);
-			this._typeQueue = this._typeQueue.slice(n);
+			/* ChatGPT-style: reveal one word at a time */
+			const wordMatch = this._typeQueue.match(/^(\s+|[^\s]+(?:\s+)?)/);
+			const take = wordMatch ? wordMatch[0] : this._typeQueue.slice(0, 1);
+			this._typeQueue = this._typeQueue.slice(take.length);
 			const msg = this.messages.find((m) => m.id === this._typeMsgId);
 			if (msg) {
 				msg.text = (msg.text || "") + take;
@@ -614,16 +628,31 @@ chat_ai.sidebar.AppOptions = {
 				const box = this.$refs.messages;
 				if (box) box.scrollTop = box.scrollHeight;
 			});
-			const delay = take.includes("\n") ? 36 : take.match(/[.!?]/) ? 42 : 16;
+			let delay = 52;
+			if (/[.!?…]/.test(take)) delay = 110;
+			else if (/\n/.test(take)) delay = 80;
+			else if (/[,;:]/.test(take)) delay = 70;
+			else if (take.length > 12) delay = 64;
 			this._typeTimer = setTimeout(() => this.drainTypewriter(), delay);
 		},
 		typeToFull(msgId, fullText, meta) {
 			const msg = this.messages.find((m) => m.id === msgId);
 			if (!msg) return Promise.resolve();
-			const current = msg.text || "";
 			const target = fullText || "";
 			this._typePendingMeta = meta || null;
 			if (!target) {
+				this.applyMessageMeta(msg, meta);
+				msg.typing = false;
+				return Promise.resolve();
+			}
+			/* Sync queue to remaining text only — avoid duplicating streamed chunks */
+			const current = msg.text || "";
+			if (this._typeTimer) {
+				clearTimeout(this._typeTimer);
+				this._typeTimer = null;
+			}
+			this._typeQueue = "";
+			if (target === current) {
 				this.applyMessageMeta(msg, meta);
 				msg.typing = false;
 				return Promise.resolve();
@@ -637,9 +666,7 @@ chat_ai.sidebar.AppOptions = {
 				}
 				this.enqueueType(msgId, rest);
 			} else {
-				/* Replace path: retype from empty for typing style */
 				msg.text = "";
-				this._typeQueue = "";
 				this.enqueueType(msgId, target);
 			}
 			return new Promise((resolve) => {
@@ -652,6 +679,12 @@ chat_ai.sidebar.AppOptions = {
 				};
 				wait();
 			});
+		},
+		toggleAutoSpeak() {
+			if (!this.enableVoiceOut || !this.ttsAvailable) return;
+			this.autoSpeak = !this.autoSpeak;
+			localStorage.setItem("chat_ai_auto_speak", this.autoSpeak ? "1" : "0");
+			if (!this.autoSpeak) this.stopSpeaking();
 		},
 		async loadArtifacts() {
 			if (!this.session) {
@@ -747,15 +780,7 @@ chat_ai.sidebar.AppOptions = {
 				const box = this.$refs.messages;
 				if (box) box.scrollTop = box.scrollHeight;
 			});
-			if (
-				role === "assistant" &&
-				!opts.history &&
-				this.autoSpeak &&
-				this.enableVoiceOut &&
-				msg.text
-			) {
-				this.speak(msg);
-			}
+			/* Auto-speak is handled after typewriter finishes (applyMessageMeta / typeToFull) */
 			return msg;
 		},
 		openLink(dt, nm) {
@@ -1379,6 +1404,14 @@ chat_ai.sidebar.AppOptions = {
         @keydown="onKeydown"
       ></textarea>
       <div class="cai-composer-actions">
+        <button
+          v-if="enableVoiceOut && ttsAvailable"
+          type="button"
+          class="cai-icon-btn cai-speak-toggle"
+          :class="{ 'cai-speak-toggle--on': autoSpeak }"
+          :title="autoSpeak ? ui.speakOn : ui.speakOff"
+          @click="toggleAutoSpeak"
+        >{{ autoSpeak ? '🔊' : '🔇' }}</button>
         <button
           v-if="voiceAvailable"
           type="button"
