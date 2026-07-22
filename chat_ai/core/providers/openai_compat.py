@@ -23,7 +23,7 @@ class OpenAICompatProvider(LLMProvider):
 		api_endpoint: str = "https://api.openai.com/v1",
 		model: str = "gpt-4o",
 		temperature: float = 0.2,
-		max_tokens: int = 4096,
+		max_tokens: int = 2048,
 		azure_deployment: str = "",
 		azure_api_version: str = "",
 		provider_label: str = "OpenAI",

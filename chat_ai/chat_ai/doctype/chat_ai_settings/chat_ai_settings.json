@@ -131,7 +131,7 @@
    "fieldname": "max_tokens",
    "fieldtype": "Int",
    "label": "Max Tokens",
-   "default": "4096"
+   "default": "2048"
   },
   {
    "fieldname": "azure_deployment",
