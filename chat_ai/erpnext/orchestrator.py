@@ -35,6 +35,7 @@ from chat_ai.core.assistant_mode import (
 from chat_ai.core.tool_enrichment import enrich_tool_args
 from chat_ai.core.artifacts import ArtifactBuilder, persist_artifacts
 from chat_ai.core.tool_pipeline import clear_cancel
+from chat_ai.erpnext.context.defaults import filter_user_visible_assumptions
 from chat_ai.erpnext.events.realtime_events import publish_progress, publish_stream, publish_typed_stream
 from chat_ai.erpnext.settings import get_settings_dict
 from chat_ai.plugin.loader import load_all as load_plugins
@@ -395,9 +396,10 @@ def run_turn(
 		return _persist(session, memory, user_message, resp, settings, tokens=(plan.tokens_in, plan.tokens_out), model=plan.model)
 
 	openai_tools = router.list_openai_tools()
+	visible_assumptions = filter_user_visible_assumptions(plan.assumptions)
 	assumption_note = ""
-	if plan.assumptions:
-		assumption_note = "Assumptions:\n" + "\n".join(f"- {a}" for a in plan.assumptions[:5])
+	if visible_assumptions:
+		assumption_note = "Assumptions:\n" + "\n".join(f"- {a}" for a in visible_assumptions[:5])
 	memory_note = ""
 	if settings.get("enable_conversation_memory", 1) and memory.entities:
 		memory_note = "\n\nWorking memory entities:\n" + json.dumps(memory.entities, default=str)[:2000]
@@ -433,8 +435,9 @@ def run_turn(
 				assumptions=plan.assumptions,
 				already_content=result.content,
 			)
-			if plan.assumptions and plan.assumptions[0] not in md:
-				md = "\n".join(plan.assumptions[:3]) + "\n\n" + md
+			visible = filter_user_visible_assumptions(plan.assumptions)
+			if visible and visible[0] not in md:
+				md = "\n".join(visible[:3]) + "\n\n" + md
 			resp = AssistantResponse(markdown=md)
 			# Attach blocks from prior tool results if any
 			if tool_results:
@@ -489,8 +492,9 @@ def run_turn(
 			)
 
 	resp = build_from_tool_results(tool_results, preface="Here’s what I found:")
-	if plan.assumptions:
-		resp.markdown = "\n".join(plan.assumptions[:3]) + "\n\n" + resp.markdown
+	visible = filter_user_visible_assumptions(plan.assumptions)
+	if visible:
+		resp.markdown = "\n".join(visible[:3]) + "\n\n" + resp.markdown
 	publish_progress(session_name, "done")
 	if settings.get("enable_streaming", 1):
 		publish_typed_stream(session_name, resp.markdown or "", chunk_size=5)
@@ -575,7 +579,9 @@ def _direct_answer(provider, settings, msg, context, history, plan):
 		result = provider.chat(messages)
 		md = result.content or plan.raw_content or "Done."
 	if plan.assumptions:
-		md = "\n".join(plan.assumptions[:3]) + "\n\n" + md
+		visible = filter_user_visible_assumptions(plan.assumptions)
+		if visible:
+			md = "\n".join(visible[:3]) + "\n\n" + md
 	return AssistantResponse(markdown=md)
 
 

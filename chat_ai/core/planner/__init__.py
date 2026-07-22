@@ -36,7 +36,7 @@ Respond with JSON only:
   "slots": {},
   "is_simple_question": false,
   "risk_level": "low",
-  "assumptions": ["Using Company: X (only available company)"],
+  "assumptions": [],
   "implementation_plan": ["Step one — tool: search", "Step two — tool: create_task"],
   "needs_plan_approval": false,
   "needs_clarification": false,
@@ -50,6 +50,7 @@ Rules:
 - needs_plan_approval=true when the request will create/update/delete/submit multiple records or bulk operations.
 - risk_level: low (single safe create/read), medium (single submit/SO/PO), high (delete/bulk/import/settings).
 - Use intelligent_defaults, context, and memory entities when available; do not ask for values already resolved.
+- Leave assumptions empty for routine defaults (Currency, Fiscal Year, Warehouse, Branch). Only list an assumption when a real choice was made that the user should know.
 - Never invent ERPNext document names or IDs. If required slots are missing, set needs_clarification true.
 - candidate_tools: optional shortlist of tool names likely needed (prefer narrow skill tools over generic CRUD).
 - Prefer naming the tool in each implementation_plan step when known.
@@ -139,11 +140,14 @@ def _parse_plan(
 	assumptions = data.get("assumptions") or []
 	if isinstance(assumptions, str):
 		assumptions = [assumptions]
-	# Merge context assumptions if planner omitted them
-	ctx_assumptions = (context or {}).get("assumptions") or []
+	# Merge context assumptions if planner omitted them (skip routine defaults)
+	from chat_ai.erpnext.context.defaults import filter_user_visible_assumptions
+
+	ctx_assumptions = filter_user_visible_assumptions((context or {}).get("assumptions") or [])
 	for a in ctx_assumptions:
 		if a and a not in assumptions:
 			assumptions.append(a)
+	assumptions = filter_user_visible_assumptions(assumptions)
 	impl = data.get("implementation_plan") or []
 	if isinstance(impl, str):
 		impl = [impl]
@@ -171,8 +175,11 @@ def _parse_plan(
 
 
 def merge_context_assumptions(plan: Plan, context: dict | None) -> Plan:
-	ctx_assumptions = (context or {}).get("assumptions") or []
+	from chat_ai.erpnext.context.defaults import filter_user_visible_assumptions
+
+	ctx_assumptions = filter_user_visible_assumptions((context or {}).get("assumptions") or [])
 	for a in ctx_assumptions:
 		if a and a not in plan.assumptions:
 			plan.assumptions.append(a)
+	plan.assumptions = filter_user_visible_assumptions(plan.assumptions)
 	return plan

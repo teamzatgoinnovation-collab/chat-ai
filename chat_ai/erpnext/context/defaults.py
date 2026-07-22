@@ -4,9 +4,16 @@ from __future__ import annotations
 
 import frappe
 
+# Shown in chat only when meaningful — not routine company defaults.
+_SILENT_ASSUMPTION_LABELS = frozenset({"currency", "fiscal year", "branch", "warehouse"})
+
 
 def resolve_intelligent_defaults(context: dict | None = None) -> dict:
-	"""Return { values: {...}, assumptions: [...] }."""
+	"""Return { values: {...}, assumptions: [...] }.
+
+	Currency / Fiscal Year / Branch / Warehouse are applied as values but not
+	surfaced as 'Using …' lines in the chat reply.
+	"""
 	context = context or {}
 	values: dict = {}
 	assumptions: list[str] = []
@@ -14,30 +21,45 @@ def resolve_intelligent_defaults(context: dict | None = None) -> dict:
 	company = _resolve_company(context)
 	if company:
 		values["company"] = company
-		assumptions.append(_assumption("Company", company))
+		# Only mention Company when it is a clear single default (not every turn noise)
+		# Callers that need a spoken company line (e.g. status brief) can read values.
 
 	branch = _resolve_branch(company)
 	if branch:
 		values["branch"] = branch
-		assumptions.append(_assumption("Branch", branch))
 
 	warehouse = _resolve_warehouse(company)
 	if warehouse:
 		values["warehouse"] = warehouse
-		assumptions.append(_assumption("Warehouse", warehouse))
 
 	if company:
 		currency = frappe.db.get_value("Company", company, "default_currency")
 		if currency:
 			values["currency"] = currency
-			assumptions.append(f"Using Currency: {currency} (company default).")
 
 		fy = _resolve_fiscal_year(company)
 		if fy:
 			values["fiscal_year"] = fy
-			assumptions.append(f"Using Fiscal Year: {fy} (active).")
 
 	return {"values": values, "assumptions": assumptions}
+
+
+def filter_user_visible_assumptions(assumptions: list[str] | None) -> list[str]:
+	"""Drop routine default lines (Currency, Fiscal Year, etc.) from chat text."""
+	out = []
+	for a in assumptions or []:
+		s = str(a or "").strip()
+		if not s:
+			continue
+		low = s.lower()
+		if low.startswith("using currency:") or " (company default)" in low:
+			continue
+		if low.startswith("using fiscal year:") or " (active)." in low and "fiscal" in low:
+			continue
+		if any(low.startswith(f"using {label}:") for label in _SILENT_ASSUMPTION_LABELS):
+			continue
+		out.append(s)
+	return out
 
 
 def _assumption(label: str, value: str, reason: str = "") -> str:
