@@ -213,6 +213,19 @@ def _ensure_desk_entry():
 				sb.save(ignore_permissions=True)
 
 		# Collapse broken App-type "Chat AI" + nested "AI Admin" into one top-level Link.
+		# Frappe v16 permits Link icons only when label.lower() == Workspace Sidebar name.lower().
+		sidebar_name = "AI Admin"
+		if frappe.db.exists("Workspace Sidebar", "Chat AI"):
+			sidebar_name = "Chat AI"
+		elif frappe.db.exists("Workspace Sidebar", "AI Admin"):
+			# Prefer Desk label "Chat AI" — rename sidebar so boot key matches.
+			try:
+				frappe.rename_doc("Workspace Sidebar", "AI Admin", "Chat AI", force=True, show_alert=False)
+				sidebar_name = "Chat AI"
+			except Exception:
+				sidebar_name = "AI Admin"
+
+		desk_label = sidebar_name
 		for name in frappe.get_all(
 			"Desktop Icon",
 			filters={"app": "chat_ai"},
@@ -220,8 +233,8 @@ def _ensure_desk_entry():
 		):
 			doc = frappe.get_doc("Desktop Icon", name)
 			dirty = False
-			if doc.label != "Chat AI":
-				doc.label = "Chat AI"
+			if doc.label != desk_label:
+				doc.label = desk_label
 				dirty = True
 			if doc.icon_type != "Link":
 				doc.icon_type = "Link"
@@ -229,8 +242,8 @@ def _ensure_desk_entry():
 			if doc.link_type != "Workspace Sidebar":
 				doc.link_type = "Workspace Sidebar"
 				dirty = True
-			if doc.link_to != "AI Admin":
-				doc.link_to = "AI Admin"
+			if doc.link_to != sidebar_name:
+				doc.link_to = sidebar_name
 				dirty = True
 			if doc.icon != "bot":
 				doc.icon = "bot"
@@ -249,11 +262,11 @@ def _ensure_desk_entry():
 			icon = frappe.get_doc(
 				{
 					"doctype": "Desktop Icon",
-					"label": "Chat AI",
+					"label": desk_label,
 					"app": "chat_ai",
 					"icon_type": "Link",
 					"link_type": "Workspace Sidebar",
-					"link_to": "AI Admin",
+					"link_to": sidebar_name,
 					"icon": "bot",
 					"standard": 1,
 					"hidden": 0,
@@ -262,10 +275,10 @@ def _ensure_desk_entry():
 			icon.flags.ignore_links = True
 			icon.insert(ignore_permissions=True)
 
-		# Deduplicate: keep one top-level "Chat AI", drop leftovers (e.g. "AI Admin")
+		# Deduplicate: keep one top-level icon for chat_ai
 		keepers = frappe.get_all(
 			"Desktop Icon",
-			filters={"app": "chat_ai", "label": "Chat AI"},
+			filters={"app": "chat_ai", "label": desk_label},
 			pluck="name",
 			order_by="modified desc",
 		)
