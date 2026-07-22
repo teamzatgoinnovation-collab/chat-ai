@@ -192,14 +192,6 @@ def _sanitize_provider_settings():
 				doc.provider = "OpenRouter"
 			changed = True
 
-		# Once: clear placeholder Default Model so the field shows blank
-		if not frappe.db.get_global("chat_ai_blank_default_model"):
-			placeholder = (doc.default_model or "").strip()
-			if placeholder in ("gpt-4o", "openrouter/auto"):
-				doc.default_model = ""
-				changed = True
-			frappe.db.set_global("chat_ai_blank_default_model", "1")
-
 		if changed:
 			doc.save(ignore_permissions=True)
 	except Exception:
